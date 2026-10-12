@@ -1,0 +1,233 @@
+require('dotenv').config();
+const express = require('express');
+const mysql = require('mysql2/promise');
+const cors = require('cors');
+const multer = require('multer');
+const upload = multer({ storage: multer.memoryStorage() });
+const XLSX = require('xlsx');
+
+const app = express();
+app.use(express.json());
+app.use(cors());
+
+// Connect to TiDB Cloud using MySQL configuration
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 4000,
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: true
+  },
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+
+// --- INITIALIZE TABLES ON STARTUP ---
+async function initDB() {
+  try {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS users (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          username VARCHAR(100) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          role VARCHAR(20) NOT NULL,
+          parent_admin_id INT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS tender_database (
+          id INT AUTO_INCREMENT PRIMARY KEY,
+          batch_id VARCHAR(100) NOT NULL,
+          upload_date VARCHAR(50) NOT NULL,
+          file_name VARCHAR(255) NOT NULL,
+          trader VARCHAR(100),
+          commodity VARCHAR(100),
+          lot_no VARCHAR(50),
+          price DECIMAL(12,2),
+          bags INT,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS saved_bills (
+          id VARCHAR(100) PRIMARY KEY,
+          unique_id VARCHAR(100),
+          trade_date VARCHAR(50),
+          weighed_date VARCHAR(50),
+          ca_name VARCHAR(100),
+          weighted_by VARCHAR(100),
+          trader VARCHAR(100),
+          commodity VARCHAR(100),
+          lot_no VARCHAR(50),
+          bags INT,
+          bag_weights JSON,
+          total_qty DECIMAL(10,2),
+          less_qty DECIMAL(10,2),
+          net_qty DECIMAL(10,2),
+          price DECIMAL(12,2),
+          amount DECIMAL(12,2),
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    console.log("Database tables verified/created successfully on TiDB Cloud!");
+  } catch (err) {
+    console.error("Database initialization error:", err);
+  }
+}
+initDB();
+
+// --- API ENDPOINTS ---
+
+// 1. Get all tenders
+app.get('/api/tenders', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM tender_database ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 2. Upload and Parse Excel Tenders (Flexible column matching + Debug logging)
+app.post('/api/tenders/upload', upload.any(), async (req, res) => {
+  try {
+    console.log("--- UPLOAD REQUEST RECEIVED ---");
+    const file = req.files && req.files.length > 0 ? req.files[0] : null;
+    if (!file) {
+      return res.status(400).json({ error: "No file uploaded." });
+    }
+
+    const workbook = XLSX.read(file.buffer, { type: 'buffer' });
+    const sheetName = workbook.SheetNames[0];
+    const sheetData = XLSX.utils.sheet_to_json(workbook.Sheets[sheetName]);
+
+    console.log("Excel Sheet Total Rows:", sheetData.length);
+    if (sheetData.length > 0) {
+      console.log("Sample Excel Row Keys Found:", Object.keys(sheetData[0]));
+      console.log("Sample Excel Row Data:", sheetData[0]);
+    }
+
+    const batchId = 'BATCH_' + Date.now();
+    const options = { day: 'numeric', month: 'short', year: 'numeric' };
+    const currentDate = new Date().toLocaleDateString('en-GB', options);
+    const fileName = file.originalname;
+
+    let insertedCount = 0;
+
+    for (const row of sheetData) {
+      // Create a lowercase key lookup map
+      const cleanRow = {};
+      Object.keys(row).forEach(k => {
+        cleanRow[k.trim().toLowerCase()] = row[k];
+      });
+
+      // Flexible column matching for Trader, Commodity, Lot, Price, Bags
+      const trader = String(
+        cleanRow['trader'] || cleanRow['trader name'] || cleanRow['tradername'] || cleanRow[0] || ''
+      ).trim();
+
+      const commodity = String(
+        cleanRow['commodity'] || cleanRow['item'] || cleanRow['goods'] || cleanRow[1] || 'General'
+      ).trim();
+
+      const lotNo = String(
+        cleanRow['lotno'] || cleanRow['lot no'] || cleanRow['lot number'] || cleanRow['lot'] || cleanRow[2] || ''
+      ).trim();
+
+      const price = parseFloat(
+        cleanRow['price'] || cleanRow['rate'] || cleanRow[3] || 0
+      );
+
+      const bags = parseInt(
+        cleanRow['bags'] || cleanRow['bag count'] || cleanRow['bagcount'] || cleanRow[4] || 1, 
+        10
+      );
+
+      if (trader && lotNo) {
+        await pool.query(
+          `INSERT INTO tender_database (batch_id, upload_date, file_name, trader, commodity, lot_no, price, bags) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+          [batchId, currentDate, fileName, trader, commodity, lotNo, price, bags]
+        );
+        insertedCount++;
+      }
+    }
+
+    console.log(`Successfully inserted ${insertedCount} rows into TiDB Cloud.`);
+    res.json({ success: true, message: `Successfully imported ${insertedCount} tenders!`, batchId });
+  } catch (err) {
+    console.error("Error processing Excel upload:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 3. Get all saved bills
+app.get('/api/bills', async (req, res) => {
+  try {
+    const [rows] = await pool.query('SELECT * FROM saved_bills ORDER BY created_at DESC');
+    res.json(rows);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// 4. Save a new bill
+app.post('/api/bills', async (req, res) => {
+  const options = { day: 'numeric', month: 'short', year: 'numeric' };
+  const currentDate = new Date().toLocaleDateString('en-GB', options);
+
+  const { 
+    id, 
+    uniqueId, 
+    tradeDate = currentDate, 
+    weighedDate = currentDate, 
+    caName, 
+    weightedBy, 
+    trader, 
+    commodity, 
+    lotNo, 
+    bags, 
+    bagWeights, 
+    totalQty, 
+    lessQty, 
+    netQty, 
+    price, 
+    amount 
+  } = req.body;
+
+  try {
+    await pool.query(
+      `INSERT INTO saved_bills (id, unique_id, trade_date, weighed_date, ca_name, weighted_by, trader, commodity, lot_no, bags, bag_weights, total_qty, less_qty, net_qty, price, amount) 
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        id, 
+        uniqueId, 
+        tradeDate || currentDate, 
+        weighedDate || currentDate, 
+        caName, 
+        weightedBy || 'Admin', 
+        trader, 
+        commodity, 
+        lotNo, 
+        bags, 
+        JSON.stringify(bagWeights), 
+        totalQty, 
+        lessQty, 
+        netQty, 
+        price, 
+        amount
+      ]
+    );
+    res.json({ success: true, message: "Bill saved successfully" });
+  } catch (err) {
+    console.error("Error saving bill:", err);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+const PORT = process.env.PORT || 3000;
+app.listen(PORT, () => console.log(`Server running on port ${PORT}`));

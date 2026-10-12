@@ -1,7 +1,7 @@
 import * as DocumentPicker from 'expo-document-picker';
-import * as FileSystem from 'expo-file-system';
 import * as Print from 'expo-print';
 import { useEffect, useRef, useState } from 'react';
+
 import {
   Alert,
   Modal,
@@ -16,10 +16,26 @@ import {
 } from 'react-native';
 import * as XLSX from 'xlsx';
 
+// Connected to local server / Render backend
+const RENDER_BACKEND_URL = 'http://localhost:3000';
+
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun", 
   "Jul", "Aug", "Sept", "Oct", "Nov", "Dec"
 ];
+
+function generateUniqueId(dateStr: string, existingBills: any[]): string {
+  const now = new Date();
+  const dd = String(now.getDate()).padStart(2, '0');
+  const mm = String(now.getMonth() + 1).padStart(2, '0');
+  const yy = String(now.getFullYear()).slice(-2);
+  const baseId = `M${dd}${mm}${yy}D`;
+
+  const todayBillsCount = existingBills.filter(b => b.uniqueId && b.uniqueId.startsWith(baseId)).length;
+  const sequenceNum = todayBillsCount + 1;
+
+  return `${baseId}-${sequenceNum}`;
+}
 
 function parseBillDate(dateStr: string): number {
   if (!dateStr) return 0;
@@ -61,24 +77,24 @@ export default function App() {
 
   const [activeTab, setActiveTab] = useState('entry');
   const [caName] = useState("Nitin CA");
-  const [currentDate, setItemsDate] = useState("29 Sept 2026");
+  
+  const optionsCurrent: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
+  const formattedToday = new Date().toLocaleDateString('en-GB', optionsCurrent);
+  const [currentDate, setItemsDate] = useState(formattedToday);
 
-  // Date filter selections & Commodity filter for Saved Bills tab
   const [fromDateStr, setFromDateStr] = useState("");
   const [toDateStr, setToDateStr] = useState("");
   const [filterCommodity, setFilterCommodity] = useState("All");
 
-  // Custom Calendar Modal state
   const [calendarTarget, setCalendarTarget] = useState<'from' | 'to' | null>(null);
   const today = new Date();
   const [pickerYear, setPickerYear] = useState(today.getFullYear());
   const [pickerMonth, setPickerMonth] = useState(today.getMonth());
   const [commodityFilterModalVisible, setCommodityFilterModalVisible] = useState(false);
 
-  // Local Tender Database
   const [tenderDatabase, setTenderDatabase] = useState<Record<string, any[]>>({
     "NITIN": [
-      { lotNo: "L0001", commodity: "Paddy", price: 8000, bags: 5, date: "29 Sept 2026" }
+      { lotNo: "L0001", commodity: "Paddy", price: 8000, bags: 5, date: formattedToday }
     ]
   });
 
@@ -96,48 +112,44 @@ export default function App() {
   const inputRefs = useRef<any>({});
 
   useEffect(() => {
-    if (Platform.OS === 'web') {
+    const fetchCloudData = async () => {
       try {
-        const storedBills = localStorage.getItem('nitin_saved_bills');
-        if (storedBills) setSavedBills(JSON.parse(storedBills));
-      } catch (e) {
-        console.error("Local storage load failed", e);
-      }
-    }
-  }, []);
-
-  useEffect(() => {
-    if (Platform.OS === 'web') {
-      try {
-        localStorage.setItem('nitin_saved_bills', JSON.stringify(savedBills));
-      } catch (e) {
-        console.error("Local storage save failed", e);
-      }
-    }
-  }, [savedBills]);
-
-  const formatExcelDate = (val: any) => {
-    if (!val) return "29 Sept 2026";
-    if (typeof val === 'number') {
-      const excelEpoch = new Date(1899, 11, 30);
-      const d = new Date(excelEpoch.getTime() + val * 86400000);
-      return `${String(d.getDate()).padStart(2, '0')} ${MONTH_NAMES[d.getMonth()]} ${d.getFullYear()}`;
-    }
-    if (typeof val === 'string') {
-      const trimmed = val.trim();
-      if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
-        const parts = trimmed.split('-');
-        const y = parseInt(parts[0], 10);
-        const m = parseInt(parts[1], 10) - 1;
-        const d = parseInt(parts[2], 10);
-        const dateObj = new Date(y, m, d);
-        if (!isNaN(dateObj.getTime())) {
-          return `${String(dateObj.getDate()).padStart(2, '0')} ${MONTH_NAMES[dateObj.getMonth()]} ${dateObj.getFullYear()}`;
+        const tendersRes = await fetch(`${RENDER_BACKEND_URL}/api/tenders`);
+        const tendersData = await tendersRes.json();
+        
+        if (Array.isArray(tendersData)) {
+          let grouped: Record<string, any[]> = {};
+          tendersData.forEach(item => {
+            const tr = item.trader || "Unknown Trader";
+            if (!grouped[tr]) grouped[tr] = [];
+            grouped[tr].push({
+              lotNo: item.lot_no || item.lotNo,
+              commodity: item.commodity || "General",
+              price: parseFloat(item.price) || 0,
+              bags: parseInt(item.bags, 10) || 1,
+              date: item.upload_date || item.date || formattedToday,
+              batchId: item.batch_id,
+              fileName: item.file_name
+            });
+          });
+          if (Object.keys(grouped).length > 0) {
+            setTenderDatabase(grouped);
+          }
+        } else if (tendersData && Object.keys(tendersData).length > 0) {
+          setTenderDatabase(tendersData);
         }
+
+        const billsRes = await fetch(`${RENDER_BACKEND_URL}/api/bills`);
+        const billsData = await billsRes.json();
+        if (Array.isArray(billsData)) {
+          setSavedBills(billsData);
+        }
+      } catch (e) {
+        console.error("Failed to fetch cloud data from backend", e);
       }
-    }
-    return String(val);
-  };
+    };
+    fetchCloudData();
+  }, []);
 
   const handleExcelImport = async () => {
     try {
@@ -148,60 +160,72 @@ export default function App() {
 
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const fileUri = result.assets[0].uri;
-        let workbook;
+        const fileName = result.assets[0].name || "TenderFile.xlsx";
 
+        const formData = new FormData();
+        
         if (Platform.OS === 'web') {
           const response = await fetch(fileUri);
-          const fileData = await response.arrayBuffer();
-          workbook = XLSX.read(fileData, { type: 'array' });
+          const blob = await response.blob();
+          formData.append('file', blob, fileName);
         } else {
-          const base64Data = await FileSystem.readAsStringAsync(fileUri, {
-            encoding: FileSystem.EncodingType.Base64,
-          });
-          workbook = XLSX.read(base64Data, { type: 'base64' });
+          formData.append('file', {
+            uri: fileUri,
+            name: fileName,
+            type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+          } as any);
         }
 
-        const firstSheetName = workbook.SheetNames[0];
-        const worksheet = workbook.Sheets[firstSheetName];
-        const rawJsonData: any[] = XLSX.utils.sheet_to_json(worksheet);
+        const uploadRes = await fetch(`${RENDER_BACKEND_URL}/api/tenders/upload`, {
+          method: 'POST',
+          body: formData,
+        });
 
-        if (rawJsonData.length > 0) {
-          let newDb: Record<string, any[]> = {};
-          let importedDate = "";
+        const responseText = await uploadRes.text();
+        let uploadResult;
+        try {
+          uploadResult = JSON.parse(responseText);
+        } catch (e) {
+          console.error("Server HTML Error Response:", responseText);
+          alert(responseText || "Server error. Check backend terminal logs.");
+          return;
+        }
 
-          rawJsonData.forEach(row => {
-            let cleanRow: any = {};
-            Object.keys(row).forEach(k => {
-              cleanRow[k.trim().toLowerCase()] = row[k];
+        if (uploadRes.ok && uploadResult.success) {
+          const tendersRes = await fetch(`${RENDER_BACKEND_URL}/api/tenders`);
+          const tendersData = await tendersRes.json();
+          if (Array.isArray(tendersData)) {
+            let grouped: Record<string, any[]> = {};
+            tendersData.forEach(item => {
+              const tr = item.trader || "Unknown Trader";
+              if (!grouped[tr]) grouped[tr] = [];
+              grouped[tr].push({
+                lotNo: item.lot_no || item.lotNo,
+                commodity: item.commodity || "General",
+                price: parseFloat(item.price) || 0,
+                bags: parseInt(item.bags, 10) || 1,
+                date: item.upload_date || item.date || formattedToday,
+                batchId: item.batch_id,
+                fileName: item.file_name
+              });
             });
+            setTenderDatabase(grouped);
+          }
 
-            const trader = String(cleanRow['trader name'] || cleanRow['tradername'] || cleanRow['trader'] || 'Unknown Trader').trim();
-            const commodity = String(cleanRow['commodity'] || cleanRow['item'] || cleanRow['goods'] || 'General').trim();
-            const lotNo = String(cleanRow['lot number'] || cleanRow['lotnumber'] || cleanRow['lot'] || cleanRow['lotno'] || 'L-001').trim();
-            const price = parseFloat(cleanRow['price']) || 0;
-            const bags = parseInt(cleanRow['bag count'] || cleanRow['bagcount'] || cleanRow['bags'], 10) || 1;
-            const formattedDate = formatExcelDate(cleanRow['date']);
-
-            if (!importedDate && formattedDate) importedDate = formattedDate;
-            if (!newDb[trader]) newDb[trader] = [];
-            newDb[trader].push({ lotNo, commodity, price, bags, date: formattedDate });
-          });
-
-          setTenderDatabase(newDb);
-          if (importedDate) setItemsDate(importedDate);
+          setItemsDate(formattedToday);
           setSelectedTrader("");
           setSelectedCommodity("");
           setSelectedLot(null);
           setBagWeights({});
           setLessQty("0");
-          alert("Excel file successfully imported and updated!");
+          alert(`Excel file successfully imported under batch: ${uploadResult.batchId}!`);
         } else {
-          alert("The imported file is empty.");
+          alert(uploadResult.error || "Failed to upload tender batch.");
         }
       }
     } catch (error) {
       console.error("Import error:", error);
-      alert("Error reading file.");
+      alert("Error reading or saving file to database.");
     }
   };
 
@@ -210,10 +234,6 @@ export default function App() {
     setSelectedCommodity("");
     setSelectedLot(null);
     setBagWeights({});
-    const traderLots = tenderDatabase[trader];
-    if (traderLots && traderLots.length > 0 && traderLots[0].date) {
-      setItemsDate(traderLots[0].date);
-    }
     setTraderModalVisible(false);
   };
 
@@ -232,11 +252,10 @@ export default function App() {
       b.date === currentDate
     );
     if (isAlreadySaved) {
-      alert("This lot has already been saved and is frozen.");
+      alert("This lot has already been saved.");
       return;
     }
     setSelectedLot(lot);
-    if (lot.date) setItemsDate(lot.date);
     setBagWeights({});
     setLotModalVisible(false);
   };
@@ -262,6 +281,21 @@ export default function App() {
   const priceNum = selectedLot ? selectedLot.price : 0;
   const totalAmount = (netQty * priceNum) / 100;
 
+  const availableLotsForSelection = (selectedTrader && selectedCommodity) 
+    ? (tenderDatabase[selectedTrader] || []).filter(lot => (lot.commodity || "General") === selectedCommodity)
+    : [];
+
+  const savedLotsCount = availableLotsForSelection.filter(lot => 
+    savedBills.some(b => 
+      b.trader === selectedTrader && 
+      b.commodity === selectedCommodity && 
+      b.lotNo === lot.lotNo &&
+      b.date === currentDate
+    )
+  ).length;
+
+  const areAllLotsCompleted = availableLotsForSelection.length > 0 && savedLotsCount === availableLotsForSelection.length;
+
   const handleReset = () => {
     const performReset = () => {
       setSelectedTrader("");
@@ -282,7 +316,7 @@ export default function App() {
     }
   };
 
-  const handleSaveBill = () => {
+  const handleSaveBill = async () => {
     if (!selectedTrader || !selectedCommodity || !selectedLot) {
       alert("Please select a Trader, Commodity, and Lot before saving.");
       return;
@@ -303,8 +337,11 @@ export default function App() {
       currentBagWeightsObj[`B${i}`] = bagWeights[i] || "0";
     }
 
+    const uniqueId = generateUniqueId(currentDate, savedBills);
+
     const newBill = {
       id: Date.now().toString(),
+      uniqueId,
       date: currentDate,
       caName,
       trader: selectedTrader,
@@ -320,13 +357,52 @@ export default function App() {
       createdAt: Date.now()
     };
 
-    setSavedBills(prev => [newBill, ...prev]);
-    setSelectedTrader("");
-    setSelectedCommodity("");
-    setSelectedLot(null);
-    setLessQty("0");
-    setBagWeights({});
-    alert("Saved Successfully!");
+    try {
+      const response = await fetch(`${RENDER_BACKEND_URL}/api/bills`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(newBill)
+      });
+      const result = await response.json();
+
+      if (response.ok) {
+        setSavedBills(prev => [newBill, ...prev]);
+        setSelectedLot(null);
+        setLessQty("0");
+        setBagWeights({});
+        alert(`Saved Successfully! ID: ${uniqueId}`);
+      } else {
+        alert(result.error || "Failed to save bill to database.");
+      }
+    } catch (error) {
+      console.error("Error saving bill to cloud:", error);
+      alert("Network error while saving bill.");
+    }
+  };
+
+  const handleDeleteBill = async (billId: string) => {
+    const performDelete = async () => {
+      try {
+        setSavedBills(prev => prev.filter(b => b.id !== billId));
+        await fetch(`${RENDER_BACKEND_URL}/api/bills/${billId}`, {
+          method: 'DELETE'
+        }).catch(() => {});
+        alert("Saved bill deleted successfully. Lot is now available again.");
+      } catch (e) {
+        console.error("Error deleting bill", e);
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm("Are you sure you want to delete this saved bill? The lot will become available again.")) {
+        performDelete();
+      }
+    } else {
+      Alert.alert("Delete Saved Bill", "Are you sure you want to delete this saved bill? The lot will become available again.", [
+        { text: "Cancel", style: "cancel" },
+        { text: "Delete", style: "destructive", onPress: performDelete }
+      ]);
+    }
   };
 
   const triggerPrint = (htmlContent: string) => {
@@ -449,7 +525,6 @@ export default function App() {
     return true;
   });
 
-  // Export filtered saved bills to Excel with summary columns positioned AFTER bag weights B1, B2...
   const handleExportExcel = () => {
     if (filteredSavedBills.length === 0) {
       alert("No bills available to export for the selected filter.");
@@ -459,6 +534,7 @@ export default function App() {
     const exportData = filteredSavedBills.map((b, index) => {
       let rowObj: Record<string, any> = {
         "Sl No": index + 1,
+        "Unique ID": b.uniqueId || "M051026D-1",
         "Date": b.date,
         "CA Name": b.caName,
         "Trader Name": b.trader,
@@ -467,14 +543,12 @@ export default function App() {
         "Total Bags": b.bags
       };
 
-      // 1. Insert individual bag weight columns (B1, B2, B3...) right after Total Bags
       if (b.bagWeights) {
         Object.keys(b.bagWeights).forEach(bagKey => {
           rowObj[bagKey] = b.bagWeights[bagKey];
         });
       }
 
-      // 2. Append Total Qty, Less Qty, Net Qty, Price, and Total Amount at the VERY END
       rowObj["Total Qty (kg)"] = b.totalQty;
       rowObj["Less Qty (kg)"] = b.lessQty;
       rowObj["Net Qty (kg)"] = b.netQty;
@@ -534,7 +608,7 @@ export default function App() {
           <TextInput
             style={styles.loginInput}
             secureTextEntry
-            placeholder="Enter Password (e.g. 1234)"
+            placeholder="Enter Password (e.g. 4321)"
             placeholderTextColor="#b2bec3"
             value={passwordInput}
             onChangeText={setPasswordInput}
@@ -603,7 +677,11 @@ export default function App() {
             <View style={styles.dropdownRow}>
               <View style={{ flex: 1, marginRight: 6 }}>
                 <Text style={styles.subLabel}>Select Trader</Text>
-                <TouchableOpacity style={styles.dropdownSelector} onPress={() => setTraderModalVisible(true)}>
+                <TouchableOpacity 
+                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
+                  disabled={areAllLotsCompleted}
+                  onPress={() => setTraderModalVisible(true)}
+                >
                   <Text style={styles.dropdownText} numberOfLines={1}>{selectedTrader || "Trader"}</Text>
                   <Text style={styles.dropdownArrow}>▼</Text>
                 </TouchableOpacity>
@@ -612,7 +690,8 @@ export default function App() {
               <View style={{ flex: 1, marginHorizontal: 3 }}>
                 <Text style={styles.subLabel}>Commodity</Text>
                 <TouchableOpacity 
-                  style={styles.dropdownSelector} 
+                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
+                  disabled={areAllLotsCompleted || !selectedTrader}
                   onPress={() => { if (selectedTrader) setCommodityModalVisible(true); }}
                 >
                   <Text style={styles.dropdownText} numberOfLines={1}>{selectedCommodity || "Commodity"}</Text>
@@ -623,7 +702,8 @@ export default function App() {
               <View style={{ flex: 1, marginLeft: 6 }}>
                 <Text style={styles.subLabel}>Select Lot</Text>
                 <TouchableOpacity 
-                  style={styles.dropdownSelector} 
+                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
+                  disabled={areAllLotsCompleted || !selectedTrader || !selectedCommodity}
                   onPress={() => { if (selectedTrader && selectedCommodity) setLotModalVisible(true); }}
                 >
                   <Text style={styles.dropdownText} numberOfLines={1}>{selectedLot ? `${selectedLot.lotNo}` : "Lot"}</Text>
@@ -632,10 +712,17 @@ export default function App() {
               </View>
             </View>
 
+            {areAllLotsCompleted && (
+              <View style={styles.completedNotice}>
+                <Text style={styles.completedNoticeText}>🔒 All lots for this selection are completed and saved. Selectors are locked. Click Reset to start a new entry.</Text>
+              </View>
+            )}
+
             {selectedLot && (
               <View style={styles.priceBagBanner}>
                 <Text style={styles.bannerText}>Price: <Text style={styles.bannerHighlight}>Rs {selectedLot.price}</Text></Text>
                 <Text style={styles.bannerText}>Bags: <Text style={styles.bannerHighlight}>{selectedLot.bags}</Text></Text>
+                {selectedLot.fileName && <Text style={styles.bannerText}>File: <Text style={styles.bannerHighlight}>{selectedLot.fileName}</Text></Text>}
               </View>
             )}
 
@@ -688,7 +775,7 @@ export default function App() {
         </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
-          <Text style={styles.sectionHeader}>Saved Aada Bill-gala Patti (Re-print Maadalu):</Text>
+          <Text style={styles.sectionHeader}>Saved Aada Bill-gala Patti (Re-print & Delete):</Text>
           
           <View style={styles.dateFilterContainer}>
             <View style={styles.filterRowTop}>
@@ -742,18 +829,44 @@ export default function App() {
           {filteredSavedBills.length === 0 ? (
             <Text style={styles.noBillsText}>No saved bills found for selected filters.</Text>
           ) : (
-            filteredSavedBills.map((bill) => (
-              <View key={bill.id} style={styles.savedBillCard}>
-                <View>
-                  <Text style={styles.savedBillTitle}>{bill.trader} - {bill.commodity || ''} ({bill.lotNo})</Text>
-                  <Text style={styles.savedBillSub}>{bill.bags} Bags | Net: {bill.netQty} kg | Amount: Rs {bill.amount}</Text>
-                  <Text style={styles.savedBillDate}>{bill.date} | {bill.caName}</Text>
-                </View>
-                <TouchableOpacity style={styles.reprintBtn} onPress={() => handleReprintBill(bill)}>
-                  <Text style={styles.reprintBtnText}>Re-Print</Text>
-                </TouchableOpacity>
+            <View style={styles.tableContainer}>
+              <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                <Text style={[styles.tableCellHeader, { flex: 1.1 }]}>ID / Date</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.9 }]}>CA Name</Text>
+                <Text style={[styles.tableCellHeader, { flex: 1.1 }]}>Trader</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.9 }]}>Commodity</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Less Qty</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Total Qty</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Net Qty</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.8 }]}>Amount</Text>
+                <Text style={[styles.tableCellHeader, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
               </View>
-            ))
+
+              {filteredSavedBills.map((bill, index) => (
+                <View key={bill.id || index} style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlternate]}>
+                  <View style={{ flex: 1.1 }}>
+                    <Text style={styles.tableCellBold}>{bill.uniqueId || "M051026D-1"}</Text>
+                    <Text style={styles.tableCellSub}>{bill.date}</Text>
+                  </View>
+                  <Text style={[styles.tableCell, { flex: 0.9 }]} numberOfLines={1}>{bill.caName}</Text>
+                  <Text style={[styles.tableCell, { flex: 1.1 }]} numberOfLines={1}>{bill.trader}</Text>
+                  <Text style={[styles.tableCell, { flex: 0.9 }]} numberOfLines={1}>{bill.commodity || '-'}</Text>
+                  <Text style={[styles.tableCell, { flex: 0.7 }]}>{bill.lessQty} kg</Text>
+                  <Text style={[styles.tableCell, { flex: 0.7 }]}>{bill.totalQty} kg</Text>
+                  <Text style={[styles.tableCellBold, { flex: 0.7, color: '#e17055' }]}>{bill.netQty} kg</Text>
+                  <Text style={[styles.tableCellBold, { flex: 0.8, color: '#00b894' }]}>Rs {bill.amount}</Text>
+                  
+                  <View style={{ flex: 1.2, flexDirection: 'row', justifyContent: 'center', gap: 4 }}>
+                    <TouchableOpacity style={styles.tableReprintBtn} onPress={() => handleReprintBill(bill)}>
+                      <Text style={styles.tableReprintText}>Print</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity style={styles.tableDeleteBtn} onPress={() => handleDeleteBill(bill.id)}>
+                      <Text style={styles.tableDeleteText}>Delete</Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              ))}
+            </View>
           )}
         </ScrollView>
       )}
@@ -898,32 +1011,42 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* Lot Modal */}
+      {/* Lot Modal - Filters out saved lots completely */}
       <Modal visible={lotModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
-            <Text style={styles.modalTitle}>Select Lot ({selectedTrader} - {selectedCommodity})</Text>
-            {selectedTrader && selectedCommodity && tenderDatabase[selectedTrader]
-              ?.filter(lot => (lot.commodity || "General") === selectedCommodity)
-              .map(lot => {
-                const isSaved = savedBills.some(b => 
-                  b.trader === selectedTrader && 
-                  b.commodity === selectedCommodity && 
-                  b.lotNo === lot.lotNo &&
-                  b.date === currentDate
-                );
-                return (
+            <Text style={styles.modalTitle}>Select Lot ({selectedTrader} / {selectedCommodity})</Text>
+            
+            <ScrollView style={{ maxHeight: 300 }}>
+              {selectedTrader && selectedCommodity && tenderDatabase[selectedTrader]
+                ?.filter(lot => {
+                  const isSaved = savedBills.some(b => 
+                    b.trader === selectedTrader && 
+                    b.commodity === selectedCommodity && 
+                    b.lotNo === lot.lotNo &&
+                    b.date === currentDate
+                  );
+                  return (lot.commodity || "General") === selectedCommodity && !isSaved;
+                })
+                .map(lot => (
                   <TouchableOpacity 
                     key={lot.lotNo} 
-                    style={[styles.modalItem, isSaved && styles.modalItemFrozen]}
+                    style={styles.modalItem}
                     onPress={() => handleSelectLot(lot)}
                   >
-                    <Text style={[styles.modalItemText, isSaved && styles.modalItemTextFrozen]}>
-                      {lot.lotNo} ({lot.bags} Bags) - Rs {lot.price} {isSaved ? "🔒 (Saved)" : ""}
+                    <Text style={styles.modalItemText}>
+                      {lot.lotNo} ({lot.bags} Bags) - Rs {lot.price} {lot.fileName ? `[${lot.fileName}]` : ''}
                     </Text>
                   </TouchableOpacity>
-                );
-              })}
+                ))}
+
+              {selectedTrader && selectedCommodity && tenderDatabase[selectedTrader]
+                ?.filter(lot => (lot.commodity || "General") === selectedCommodity)
+                .every(lot => savedBills.some(b => b.trader === selectedTrader && b.commodity === selectedCommodity && b.lotNo === lot.lotNo && b.date === currentDate)) && (
+                  <Text style={styles.noBillsText}>All lots for this trader & commodity have been saved!</Text>
+                )}
+            </ScrollView>
+
             <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setLotModalVisible(false)}>
               <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
@@ -962,8 +1085,11 @@ const styles = StyleSheet.create({
   divider: { height: 1, backgroundColor: '#f1f2f6', marginVertical: 14 },
   dropdownRow: { flexDirection: 'row', justifyContent: 'space-between' },
   dropdownSelector: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: '#dcdde1', borderRadius: 6, paddingHorizontal: 8, height: 40 },
+  dropdownSelectorLocked: { backgroundColor: '#dfe6e9', opacity: 0.6 },
   dropdownText: { fontSize: 12, color: '#2f3640', fontWeight: '500', flex: 1 },
   dropdownArrow: { fontSize: 9, color: '#718093', marginLeft: 2 },
+  completedNotice: { backgroundColor: '#e8f8f5', borderColor: '#00b894', borderWidth: 1, padding: 10, borderRadius: 6, marginTop: 12 },
+  completedNoticeText: { fontSize: 12, color: '#009473', fontWeight: 'bold', textAlign: 'center' },
   priceBagBanner: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#e1f5fe', padding: 10, borderRadius: 6, marginTop: 12 },
   bannerText: { fontSize: 13, color: '#01579b', fontWeight: '600' },
   bannerHighlight: { fontWeight: 'bold' },
@@ -999,19 +1125,23 @@ const styles = StyleSheet.create({
   exportExcelBtn: { height: 40, backgroundColor: '#00b894', paddingHorizontal: 14, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   exportExcelBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
   noBillsText: { fontSize: 13, color: '#718093', fontStyle: 'italic', textAlign: 'center', marginTop: 20 },
-  savedBillCard: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#fff', padding: 14, borderRadius: 8, marginBottom: 10, borderWidth: 1, borderColor: '#dcdde1' },
-  savedBillTitle: { fontSize: 14, fontWeight: 'bold', color: '#2f3640' },
-  savedBillSub: { fontSize: 12, color: '#57606f', marginVertical: 2 },
-  savedBillDate: { fontSize: 11, color: '#b2bec3' },
-  reprintBtn: { backgroundColor: '#0984e3', paddingVertical: 8, paddingHorizontal: 14, borderRadius: 6 },
-  reprintBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
+  tableContainer: { backgroundColor: '#fff', borderRadius: 8, borderWidth: 1, borderColor: '#dcdde1', overflow: 'hidden', marginBottom: 20 },
+  tableRow: { flexDirection: 'row', paddingVertical: 10, paddingHorizontal: 8, borderBottomWidth: 1, borderBottomColor: '#f1f2f6', alignItems: 'center' },
+  tableHeaderRow: { backgroundColor: '#f8f9fa', borderBottomWidth: 2, borderBottomColor: '#dcdde1' },
+  tableRowAlternate: { backgroundColor: '#fcfcfc' },
+  tableCellHeader: { fontSize: 11, fontWeight: 'bold', color: '#2f3640' },
+  tableCell: { fontSize: 11, color: '#2f3640' },
+  tableCellBold: { fontSize: 11, fontWeight: 'bold', color: '#2f3640' },
+  tableCellSub: { fontSize: 9, color: '#718093' },
+  tableReprintBtn: { backgroundColor: '#0984e3', paddingVertical: 5, paddingHorizontal: 8, borderRadius: 4, marginRight: 2 },
+  tableReprintText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
+  tableDeleteBtn: { backgroundColor: '#ff7675', paddingVertical: 5, paddingHorizontal: 8, borderRadius: 4 },
+  tableDeleteText: { color: '#fff', fontSize: 10, fontWeight: 'bold' },
   modalOverlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.5)', justifyContent: 'center', alignItems: 'center' },
   modalContent: { width: '85%', maxWidth: 400, backgroundColor: '#fff', borderRadius: 10, padding: 20 },
   modalTitle: { fontSize: 16, fontWeight: 'bold', color: '#2f3640', marginBottom: 15, textAlign: 'center' },
   modalItem: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f2f6' },
-  modalItemFrozen: { backgroundColor: '#f1f2f6', opacity: 0.6 },
   modalItemText: { fontSize: 14, color: '#2f3640', fontWeight: '500' },
-  modalItemTextFrozen: { color: '#b2bec3', textDecorationLine: 'line-through' },
   modalCloseBtn: { marginTop: 15, backgroundColor: '#b2bec3', paddingVertical: 10, borderRadius: 6, alignItems: 'center' },
   modalCloseText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
   calendarModalContent: { width: '90%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 12, padding: 18, elevation: 5 },
