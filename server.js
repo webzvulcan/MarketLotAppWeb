@@ -10,31 +10,24 @@ const app = express();
 app.use(express.json());
 app.use(cors());
 
-// Serverless-safe connection pool cache
-let cachedPool = null;
+// Connection pool setup
+const pool = mysql.createPool({
+  host: process.env.DB_HOST,
+  user: process.env.DB_USER,
+  password: process.env.DB_PASSWORD,
+  database: process.env.DB_NAME,
+  port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 4000,
+  ssl: {
+    minVersion: 'TLSv1.2',
+    rejectUnauthorized: true
+  },
+  waitForConnections: true,
+  connectionLimit: 5,
+  connectTimeout: 10000
+});
 
-function getPool() {
-  if (!cachedPool) {
-    cachedPool = mysql.createPool({
-      host: process.env.DB_HOST,
-      user: process.env.DB_USER,
-      password: process.env.DB_PASSWORD,
-      database: process.env.DB_NAME,
-      port: process.env.DB_PORT ? parseInt(process.env.DB_PORT) : 4000,
-      ssl: {
-        minVersion: 'TLSv1.2',
-        rejectUnauthorized: true
-      },
-      waitForConnections: true,
-      connectionLimit: 1,
-      connectTimeout: 10000
-    });
-  }
-  return cachedPool;
-}
-
-// Helper to auto-verify or initialize tables on demand per serverless request
-async function ensureTables(pool) {
+// Helper to auto-verify or initialize tables on startup
+async function ensureTables() {
   try {
     await pool.query(`
       CREATE TABLE IF NOT EXISTS tender_database (
@@ -71,6 +64,7 @@ async function ensureTables(pool) {
           created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
       );
     `);
+    console.log("Database tables verified successfully on TiDB Cloud!");
   } catch (err) {
     console.error("Table check/creation error:", err);
   }
@@ -80,8 +74,6 @@ async function ensureTables(pool) {
 
 app.get('/api/tenders', async (req, res) => {
   try {
-    const pool = getPool();
-    await ensureTables(pool);
     const [rows] = await pool.query('SELECT * FROM tender_database ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
@@ -92,9 +84,6 @@ app.get('/api/tenders', async (req, res) => {
 
 app.post('/api/tenders/upload', upload.any(), async (req, res) => {
   try {
-    const pool = getPool();
-    await ensureTables(pool);
-    
     const file = req.files && req.files.length > 0 ? req.files[0] : null;
     if (!file) {
       return res.status(400).json({ error: "No file uploaded." });
@@ -156,8 +145,6 @@ app.post('/api/tenders/upload', upload.any(), async (req, res) => {
 
 app.get('/api/bills', async (req, res) => {
   try {
-    const pool = getPool();
-    await ensureTables(pool);
     const [rows] = await pool.query('SELECT * FROM saved_bills ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
@@ -190,9 +177,6 @@ app.post('/api/bills', async (req, res) => {
   } = req.body;
 
   try {
-    const pool = getPool();
-    await ensureTables(pool);
-
     await pool.query(
       `INSERT INTO saved_bills (id, unique_id, trade_date, weighed_date, ca_name, weighted_by, trader, commodity, lot_no, bags, bag_weights, total_qty, less_qty, net_qty, price, amount) 
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
@@ -222,5 +206,9 @@ app.post('/api/bills', async (req, res) => {
   }
 });
 
-// CRITICAL FOR VERCEL: Export app handler instead of listening on a port
-module.exports = app;
+// START SERVER (Required for Render)
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, async () => {
+  console.log(`Server running on port ${PORT}`);
+  await ensureTables();
+});
