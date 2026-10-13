@@ -89,6 +89,7 @@ app.get('/api/tenders', async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM tender_database ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
+    console.error("Error fetching tenders:", err);
     res.status(500).json({ error: err.message });
   }
 });
@@ -171,6 +172,7 @@ app.get('/api/bills', async (req, res) => {
     const [rows] = await pool.query('SELECT * FROM saved_bills ORDER BY created_at DESC');
     res.json(rows);
   } catch (err) {
+    console.error("Error fetching bills:", err);
     res.status(500).json({ error: err.message });
   }
 });
