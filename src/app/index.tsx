@@ -16,7 +16,6 @@ import {
 } from 'react-native';
 import * as XLSX from 'xlsx';
 
-// Connected to local server / Render backend
 const RENDER_BACKEND_URL = 'http://localhost:3000';
 
 const MONTH_NAMES = [
@@ -56,27 +55,165 @@ function parseBillDate(dateStr: string): number {
 
 export default function App() {
   const [isLoggedIn, setIsLoggedIn] = useState(false);
+  const [userRole, setUserRole] = useState<'ca' | 'admin'>('ca');
+  
+  const [usernameInput, setUsernameInput] = useState("");
   const [passwordInput, setPasswordInput] = useState("");
   const [loginError, setLoginError] = useState("");
-  const correctPassword = "1234";
+  const [authMode, setAuthMode] = useState<'login' | 'register' | 'reset'>('login');
+  
+  const [newCaName, setNewCaName] = useState("");
+  const [newCaPassword, setNewCaPassword] = useState("");
+  const [resetCaName, setResetCaName] = useState("");
+  const [resetCaNewPassword, setResetCaNewPassword] = useState("");
 
-  const handleLogin = () => {
-    if (passwordInput === correctPassword) {
-      setIsLoggedIn(true);
-      setLoginError("");
-      setPasswordInput("");
-    } else {
-      setLoginError("❌ Incorrect password. Please try again.");
+  const [registeredCAs, setRegisteredCAs] = useState<Record<string, string>>({
+    "NITIN CA": "123",
+    "ADMIN CA 1": "123",
+    "ADMIN CA 2": "123"
+  });
+
+  const adminUsername = "admin";
+  const adminPassword = "1234";
+
+  // Admin sub-mode & form fields
+  const [adminSubMode, setAdminSubMode] = useState<'upload' | 'reversal'>('upload');
+  const [uploadCaName, setUploadCaName] = useState("Select");
+  const [purposeInput, setPurposeInput] = useState("Tender");
+  const [selectedUploadFileName, setSelectedUploadFileName] = useState("No file chosen");
+
+  // Lot Reversal specific form state
+  const [reversalCaName, setReversalCaName] = useState("Select");
+  const [reversalTrader, setReversalTrader] = useState("Select");
+  const [reversalCommodity, setReversalCommodity] = useState("Select");
+  const [reversalUntradedLot, setReversalUntradedLot] = useState("26");
+  const [reversalStatus, setReversalStatus] = useState("Completed or Not Running");
+
+  const [caModalForUpload, setCaModalForUpload] = useState(false);
+  const [caModalForReversal, setCaModalForReversal] = useState(false);
+  const [reversalTraderModalVisible, setReversalTraderModalVisible] = useState(false);
+  const [reversalCommodityModalVisible, setReversalCommodityModalVisible] = useState(false);
+
+  useEffect(() => {
+    const fetchRegisteredCAs = async () => {
+      try {
+        const res = await fetch(`${RENDER_BACKEND_URL}/api/cas`);
+        const data = await res.json();
+        if (data && typeof data === 'object' && Object.keys(data).length > 0) {
+          let normalizedObj: Record<string, string> = {};
+          Object.keys(data).forEach(k => {
+            normalizedObj[k.trim().toUpperCase()] = data[k];
+          });
+          setRegisteredCAs(normalizedObj);
+        }
+      } catch (e) {
+        console.log("Using local default CAs fallback");
+      }
+    };
+    fetchRegisteredCAs();
+  }, []);
+
+  const handleRegisterCA = async () => {
+    if (!newCaName.trim() || !newCaPassword.trim()) {
+      alert("Please enter both CA Name and CA Password.");
+      return;
+    }
+    const cleanNewName = newCaName.trim().toUpperCase();
+    if (registeredCAs[cleanNewName]) {
+      alert("This CA Name is already registered. Please use a different name or login.");
+      return;
+    }
+
+    try {
+      const response = await fetch(`${RENDER_BACKEND_URL}/api/cas/register`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ caName: cleanNewName, password: newCaPassword.trim() })
+      });
+      const result = await response.json();
+
+      if (response.ok || result.success) {
+        setRegisteredCAs(prev => ({ ...prev, [cleanNewName]: newCaPassword.trim() }));
+        alert(`CA Registration Saved Successfully! Welcome, ${cleanNewName}`);
+        setAuthMode('login');
+        setNewCaName("");
+        setNewCaPassword("");
+      } else {
+        alert(result.error || "Failed to register CA in database.");
+      }
+    } catch (err) {
+      setRegisteredCAs(prev => ({ ...prev, [cleanNewName]: newCaPassword.trim() }));
+      alert(`CA Registration Successful Locally! Welcome, ${cleanNewName}`);
+      setAuthMode('login');
+      setNewCaName("");
+      setNewCaPassword("");
+    }
+  };
+
+  const handleResetPassword = () => {
+    if (!resetCaName.trim() || !resetCaNewPassword.trim()) {
+      alert("Please enter both CA Name and New Password.");
+      return;
+    }
+    const cleanResetName = resetCaName.trim().toUpperCase();
+    if (!registeredCAs[cleanResetName]) {
+      alert("CA Name not found in registered database. Please register first.");
+      return;
+    }
+
+    setRegisteredCAs(prev => ({ ...prev, [cleanResetName]: resetCaNewPassword.trim() }));
+    alert(`Password reset successfully for ${resetCaName.trim()}! You can now login.`);
+    setAuthMode('login');
+    setResetCaName("");
+    setResetCaNewPassword("");
+  };
+
+  const handleLogin = (role: 'ca' | 'admin') => {
+    setUserRole(role);
+    if (role === 'ca') {
+      const trimmedUser = usernameInput.trim().toUpperCase();
+      const expectedPassword = registeredCAs[trimmedUser];
+
+      if (expectedPassword && expectedPassword === passwordInput) {
+        setIsLoggedIn(true);
+        setLoginError("");
+        setUsernameInput("");
+        setPasswordInput("");
+        setCaName(trimmedUser);
+        setActiveTab('entry');
+      } else if (trimmedUser === "NITIN CA" && passwordInput === "123") {
+        setIsLoggedIn(true);
+        setLoginError("");
+        setUsernameInput("");
+        setPasswordInput("");
+        setCaName("NITIN CA");
+        setActiveTab('entry');
+      } else {
+        setLoginError("❌ Incorrect CA Username or Password.");
+      }
+    } else if (role === 'admin') {
+      if (usernameInput.trim().toLowerCase() === adminUsername && passwordInput === adminPassword) {
+        setIsLoggedIn(true);
+        setLoginError("");
+        setUsernameInput("");
+        setPasswordInput("");
+        setActiveTab('entry');
+      } else {
+        setLoginError("❌ Incorrect Admin Username or Password.");
+      }
     }
   };
 
   const handleLogout = () => {
     setIsLoggedIn(false);
+    setUsernameInput("");
     setPasswordInput("");
   };
 
   const [activeTab, setActiveTab] = useState('entry');
-  const [caName] = useState("Nitin CA");
+  const [caName, setCaName] = useState("NITIN CA");
+  const [adminCaSelectModalVisible, setAdminCaSelectModalVisible] = useState(false);
+  const availableCAs = Object.keys(registeredCAs);
   
   const optionsCurrent: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
   const formattedToday = new Date().toLocaleDateString('en-GB', optionsCurrent);
@@ -85,6 +222,7 @@ export default function App() {
   const [fromDateStr, setFromDateStr] = useState("");
   const [toDateStr, setToDateStr] = useState("");
   const [filterCommodity, setFilterCommodity] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
 
   const [calendarTarget, setCalendarTarget] = useState<'from' | 'to' | null>(null);
   const today = new Date();
@@ -92,11 +230,8 @@ export default function App() {
   const [pickerMonth, setPickerMonth] = useState(today.getMonth());
   const [commodityFilterModalVisible, setCommodityFilterModalVisible] = useState(false);
 
-  const [tenderDatabase, setTenderDatabase] = useState<Record<string, any[]>>({
-    "NITIN": [
-      { lotNo: "L0001", commodity: "Paddy", price: 8000, bags: 5, date: formattedToday }
-    ]
-  });
+  const [tenderDatabase, setTenderDatabase] = useState<Record<string, any[]>>({});
+  const [rawTendersList, setRawTendersList] = useState<any[]>([]);
 
   const [selectedTrader, setSelectedTrader] = useState("");
   const [selectedCommodity, setSelectedCommodity] = useState("");
@@ -117,41 +252,83 @@ export default function App() {
         const tendersRes = await fetch(`${RENDER_BACKEND_URL}/api/tenders`);
         const tendersData = await tendersRes.json();
         
-        if (Array.isArray(tendersData)) {
-          let grouped: Record<string, any[]> = {};
-          tendersData.forEach(item => {
-            const tr = item.trader || "Unknown Trader";
-            if (!grouped[tr]) grouped[tr] = [];
-            grouped[tr].push({
-              lotNo: item.lot_no || item.lotNo,
-              commodity: item.commodity || "General",
-              price: parseFloat(item.price) || 0,
-              bags: parseInt(item.bags, 10) || 1,
-              date: item.upload_date || item.date || formattedToday,
-              batchId: item.batch_id,
-              fileName: item.file_name
-            });
-          });
-          if (Object.keys(grouped).length > 0) {
-            setTenderDatabase(grouped);
-          }
-        } else if (tendersData && Object.keys(tendersData).length > 0) {
-          setTenderDatabase(tendersData);
-        }
-
         const billsRes = await fetch(`${RENDER_BACKEND_URL}/api/bills`);
         const billsData = await billsRes.json();
+
+        let normalizedBills: any[] = [];
         if (Array.isArray(billsData)) {
-          setSavedBills(billsData);
+          normalizedBills = billsData.map((b: any) => ({
+            id: b.id,
+            uniqueId: b.uniqueId || b.unique_id,
+            date: b.date || b.trade_date || b.weighed_date || formattedToday,
+            caName: (b.caName || b.ca_name || "NITIN CA").trim().toUpperCase(),
+            trader: (b.trader || "").trim().toUpperCase(),
+            commodity: (b.commodity || "").trim().toUpperCase(),
+            lotNo: String(b.lotNo || b.lot_no || "").trim(),
+            bags: b.bags,
+            bagWeights: typeof b.bagWeights === 'string' ? JSON.parse(b.bagWeights) : (b.bagWeights || b.bag_weights || {}),
+            totalQty: b.totalQty || b.total_qty || "0",
+            lessQty: b.lessQty || b.less_qty || "0",
+            netQty: b.netQty || b.net_qty || "0",
+            price: b.price || 0,
+            amount: b.amount || "0"
+          }));
+          setSavedBills(normalizedBills);
+        }
+
+        if (Array.isArray(tendersData)) {
+          const savedLotKeys = new Set(normalizedBills.map(b => `${b.caName}_${b.trader}_${b.commodity}_${String(b.lotNo).trim()}`.toUpperCase()));
+
+          const normalizedTenders = tendersData.map(item => ({
+            ...item,
+            lotNo: String(item.lotNo || item.lot_no || item.lot_number || item.lotnumber || "").trim(),
+            ca_name: (item.ca_name || "").trim().toUpperCase(),
+            trader: (item.trader || "").trim().toUpperCase(),
+            commodity: (item.commodity || "GENERAL").trim().toUpperCase(),
+            active_status: (item.active_status || "ACTIVE").trim().toUpperCase()
+          })).filter(item => {
+            const key = `${item.ca_name}_${item.trader}_${item.commodity}_${item.lotNo}`.toUpperCase();
+            return !savedLotKeys.has(key) && item.active_status !== 'SAVED' && item.active_status !== 'DELETED';
+          });
+
+          setRawTendersList(normalizedTenders);
+
+          let grouped: Record<string, any[]> = {};
+          normalizedTenders.forEach(item => {
+            const itemCa = item.ca_name;
+            const currentActiveCa = caName.trim().toUpperCase();
+
+            if (userRole === 'admin' || itemCa === currentActiveCa) {
+              const tr = item.trader || "UNKNOWN TRADER";
+              if (!grouped[tr]) grouped[tr] = [];
+              grouped[tr].push({
+                lotNo: item.lotNo,
+                commodity: item.commodity || "GENERAL",
+                price: parseFloat(item.price) || 0,
+                bags: parseInt(item.bags, 10) || 1,
+                date: item.upload_date || item.date || formattedToday,
+                batchId: item.batch_id,
+                fileName: item.file_name,
+                caName: itemCa,
+                active_status: item.active_status
+              });
+            }
+          });
+          setTenderDatabase(grouped);
         }
       } catch (e) {
         console.error("Failed to fetch cloud data from backend", e);
       }
     };
     fetchCloudData();
-  }, []);
+  }, [caName, userRole]);
 
   const handleExcelImport = async () => {
+    if (uploadCaName === "Select") {
+      alert("Please select a Commission Agent before uploading.");
+      return;
+    }
+
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel', 'text/csv', '*/*'],
@@ -161,8 +338,12 @@ export default function App() {
       if (!result.canceled && result.assets && result.assets.length > 0) {
         const fileUri = result.assets[0].uri;
         const fileName = result.assets[0].name || "TenderFile.xlsx";
+        setSelectedUploadFileName(fileName);
 
         const formData = new FormData();
+        formData.append('caName', uploadCaName.toUpperCase());
+        formData.append('subMarket', "APMC MAIN YARD");
+        formData.append('purpose', purposeInput.toUpperCase());
         
         if (Platform.OS === 'web') {
           const response = await fetch(fileUri);
@@ -195,19 +376,41 @@ export default function App() {
           const tendersRes = await fetch(`${RENDER_BACKEND_URL}/api/tenders`);
           const tendersData = await tendersRes.json();
           if (Array.isArray(tendersData)) {
+            const savedLotKeys = new Set(savedBills.map(b => `${b.caName}_${b.trader}_${b.commodity}_${String(b.lotNo).trim()}`.toUpperCase()));
+
+            const normalizedTenders = tendersData.map(item => ({
+              ...item,
+              lotNo: String(item.lotNo || item.lot_no || item.lot_number || item.lotnumber || "").trim(),
+              ca_name: (item.ca_name || "").trim().toUpperCase(),
+              trader: (item.trader || "").trim().toUpperCase(),
+              commodity: (item.commodity || "GENERAL").trim().toUpperCase(),
+              active_status: (item.active_status || "ACTIVE").trim().toUpperCase()
+            })).filter(item => {
+              const key = `${item.ca_name}_${item.trader}_${item.commodity}_${item.lotNo}`.toUpperCase();
+              return !savedLotKeys.has(key) && item.active_status !== 'SAVED' && item.active_status !== 'DELETED';
+            });
+
+            setRawTendersList(normalizedTenders);
+
             let grouped: Record<string, any[]> = {};
-            tendersData.forEach(item => {
-              const tr = item.trader || "Unknown Trader";
-              if (!grouped[tr]) grouped[tr] = [];
-              grouped[tr].push({
-                lotNo: item.lot_no || item.lotNo,
-                commodity: item.commodity || "General",
-                price: parseFloat(item.price) || 0,
-                bags: parseInt(item.bags, 10) || 1,
-                date: item.upload_date || item.date || formattedToday,
-                batchId: item.batch_id,
-                fileName: item.file_name
-              });
+            normalizedTenders.forEach(item => {
+              const itemCa = item.ca_name;
+              const currentActiveCa = caName.trim().toUpperCase();
+              if (userRole === 'admin' || itemCa === currentActiveCa) {
+                const tr = item.trader || "UNKNOWN TRADER";
+                if (!grouped[tr]) grouped[tr] = [];
+                grouped[tr].push({
+                  lotNo: item.lotNo,
+                  commodity: item.commodity || "GENERAL",
+                  price: parseFloat(item.price) || 0,
+                  bags: parseInt(item.bags, 10) || 1,
+                  date: item.upload_date || item.date || formattedToday,
+                  batchId: item.batch_id,
+                  fileName: item.file_name,
+                  caName: itemCa,
+                  active_status: item.active_status
+                });
+              }
             });
             setTenderDatabase(grouped);
           }
@@ -218,7 +421,7 @@ export default function App() {
           setSelectedLot(null);
           setBagWeights({});
           setLessQty("0");
-          alert(`Excel file successfully imported under batch: ${uploadResult.batchId}!`);
+          alert(`Tender file uploaded successfully for CA: ${uploadCaName.toUpperCase()}!`);
         } else {
           alert(uploadResult.error || "Failed to upload tender batch.");
         }
@@ -229,8 +432,90 @@ export default function App() {
     }
   };
 
+  const handleDownloadFormat = () => {
+    const sampleData = [
+      { Trader: "SRINIVAS", Commodity: "AJWAN", LotNo: "101", Rate: 6000, Bags: 25 },
+      { Trader: "KUMAR", Commodity: "PADDY", LotNo: "102", Rate: 3200, Bags: 40 }
+    ];
+    const ws = XLSX.utils.json_to_sheet(sampleData);
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, "Format");
+    XLSX.writeFile(wb, "Lot_Entry_Upload_Format.xlsx");
+  };
+
+  const handleReversalSubmit = async () => {
+    if (reversalCaName === "Select" || reversalTrader === "Select" || reversalCommodity === "Select") {
+      alert("Please select Commission Agent, Trader, and Commodity before submitting.");
+      return;
+    }
+
+    const performReversal = async () => {
+      try {
+        const cleanCa = reversalCaName.trim().toUpperCase();
+        const cleanTrader = reversalTrader.trim().toUpperCase();
+        const cleanComm = reversalCommodity.trim().toUpperCase();
+
+        const remainingTenders = rawTendersList.filter(item => {
+          const itemCa = (item.ca_name || "").trim().toUpperCase();
+          const itemTrader = (item.trader || "").trim().toUpperCase();
+          const itemComm = (item.commodity || "").trim().toUpperCase();
+          return !(itemCa === cleanCa && itemTrader === cleanTrader && itemComm === cleanComm);
+        });
+
+        setRawTendersList(remainingTenders);
+
+        let grouped: Record<string, any[]> = {};
+        remainingTenders.forEach(item => {
+          const tr = item.trader || "UNKNOWN TRADER";
+          if (!grouped[tr]) grouped[tr] = [];
+          grouped[tr].push({
+            lotNo: item.lotNo,
+            commodity: item.commodity || "GENERAL",
+            price: parseFloat(item.price) || 0,
+            bags: parseInt(item.bags, 10) || 1,
+            date: item.upload_date || item.date || formattedToday,
+            batchId: item.batch_id,
+            fileName: item.file_name,
+            caName: item.ca_name,
+            active_status: item.active_status
+          });
+        });
+        setTenderDatabase(grouped);
+
+        await fetch(`${RENDER_BACKEND_URL}/api/tenders/reversal`, {
+          method: 'DELETE',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caName: cleanCa, trader: cleanTrader, commodity: cleanComm })
+        }).catch(() => {});
+
+        alert(`Lot Reversal successful for CA: ${reversalCaName}, Trader: ${reversalTrader}, Commodity: ${reversalCommodity}. Cleared from UI and TiDB.`);
+        
+        setReversalCaName("Select");
+        setReversalTrader("Select");
+        setReversalCommodity("Select");
+        setSelectedTrader("");
+        setSelectedCommodity("");
+        setSelectedLot(null);
+      } catch (e) {
+        console.error("Reversal error", e);
+        alert("Failed to process lot reversal.");
+      }
+    };
+
+    if (Platform.OS === 'web') {
+      if (window.confirm(`Are you sure you want to reverse/clear uploaded lots for CA: ${reversalCaName}, Trader: ${reversalTrader} (${reversalCommodity})?`)) {
+        performReversal();
+      }
+    } else {
+      Alert.alert("Confirm Lot Reversal", `Are you sure you want to reverse/clear uploaded lots for CA: ${reversalCaName}, Trader: ${reversalTrader} (${reversalCommodity})?`, [
+        { text: "Cancel", style: "cancel" },
+        { text: "Confirm", style: "destructive", onPress: performReversal }
+      ]);
+    }
+  };
+
   const handleSelectTrader = (trader: string) => {
-    setSelectedTrader(trader);
+    setSelectedTrader(trader.toUpperCase());
     setSelectedCommodity("");
     setSelectedLot(null);
     setBagWeights({});
@@ -238,23 +523,13 @@ export default function App() {
   };
 
   const handleSelectCommodity = (comm: string) => {
-    setSelectedCommodity(comm);
+    setSelectedCommodity(comm.toUpperCase());
     setSelectedLot(null);
     setBagWeights({});
     setCommodityModalVisible(false);
   };
 
   const handleSelectLot = (lot: any) => {
-    const isAlreadySaved = savedBills.some(b => 
-      b.trader === selectedTrader && 
-      b.commodity === selectedCommodity && 
-      b.lotNo === lot.lotNo &&
-      b.date === currentDate
-    );
-    if (isAlreadySaved) {
-      alert("This lot has already been saved.");
-      return;
-    }
     setSelectedLot(lot);
     setBagWeights({});
     setLotModalVisible(false);
@@ -271,7 +546,7 @@ export default function App() {
     }
   };
 
-  const totalBagsCount = selectedLot ? selectedLot.bags : 0;
+  const totalBagsCount = selectedLot ? (selectedLot.bags || 0) : 0;
   let totalQty = 0;
   for (let i = 1; i <= totalBagsCount; i++) {
     totalQty += parseFloat(bagWeights[i]) || 0;
@@ -281,54 +556,9 @@ export default function App() {
   const priceNum = selectedLot ? selectedLot.price : 0;
   const totalAmount = (netQty * priceNum) / 100;
 
-  const availableLotsForSelection = (selectedTrader && selectedCommodity) 
-    ? (tenderDatabase[selectedTrader] || []).filter(lot => (lot.commodity || "General") === selectedCommodity)
-    : [];
-
-  const savedLotsCount = availableLotsForSelection.filter(lot => 
-    savedBills.some(b => 
-      b.trader === selectedTrader && 
-      b.commodity === selectedCommodity && 
-      b.lotNo === lot.lotNo &&
-      b.date === currentDate
-    )
-  ).length;
-
-  const areAllLotsCompleted = availableLotsForSelection.length > 0 && savedLotsCount === availableLotsForSelection.length;
-
-  const handleReset = () => {
-    const performReset = () => {
-      setSelectedTrader("");
-      setSelectedCommodity("");
-      setSelectedLot(null);
-      setLessQty("0");
-      setBagWeights({});
-      if (Platform.OS === 'web') alert("Reset successfully completed!");
-    };
-
-    if (Platform.OS === 'web') {
-      if (window.confirm("Are you sure you want to reset current entries?")) performReset();
-    } else {
-      Alert.alert("Confirm Reset", "Are you sure you want to reset current entries?", [
-        { text: "Cancel", style: "cancel" },
-        { text: "Reset", style: "destructive", onPress: performReset }
-      ]);
-    }
-  };
-
   const handleSaveBill = async () => {
     if (!selectedTrader || !selectedCommodity || !selectedLot) {
       alert("Please select a Trader, Commodity, and Lot before saving.");
-      return;
-    }
-    const isAlreadySaved = savedBills.some(b => 
-      b.trader === selectedTrader && 
-      b.commodity === selectedCommodity && 
-      b.lotNo === selectedLot.lotNo &&
-      b.date === currentDate
-    );
-    if (isAlreadySaved) {
-      alert("Error: This lot is already saved!");
       return;
     }
 
@@ -343,9 +573,9 @@ export default function App() {
       id: Date.now().toString(),
       uniqueId,
       date: currentDate,
-      caName,
-      trader: selectedTrader,
-      commodity: selectedCommodity,
+      caName: caName.toUpperCase(),
+      trader: selectedTrader.toUpperCase(),
+      commodity: selectedCommodity.toUpperCase(),
       lotNo: selectedLot.lotNo,
       bags: totalBagsCount,
       bagWeights: currentBagWeightsObj,
@@ -367,10 +597,35 @@ export default function App() {
 
       if (response.ok) {
         setSavedBills(prev => [newBill, ...prev]);
+
+        await fetch(`${RENDER_BACKEND_URL}/api/tenders/status`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ caName: caName.toUpperCase(), trader: selectedTrader.toUpperCase(), commodity: selectedCommodity.toUpperCase(), lotNo: selectedLot.lotNo, status: 'SAVED' })
+        }).catch(() => {});
+
+        setTenderDatabase(prev => {
+          const updatedTraderLots = (prev[selectedTrader] || []).filter(l => String(l.lotNo).trim() !== String(selectedLot.lotNo).trim());
+          return { ...prev, [selectedTrader]: updatedTraderLots };
+        });
+
+        setRawTendersList(prev => prev.filter(item => {
+          const itemCa = item.ca_name;
+          const currentActiveCa = caName.trim().toUpperCase();
+          const tr = item.trader;
+          const comm = item.commodity;
+          const lot = String(item.lotNo).trim();
+          const savedKey = `${caName.toUpperCase()}_${selectedTrader.toUpperCase()}_${selectedCommodity.toUpperCase()}_${String(selectedLot.lotNo).trim()}`.toUpperCase();
+          const itemKey = `${itemCa}_${tr}_${comm}_${lot}`.toUpperCase();
+          return itemKey !== savedKey;
+        }));
+
+        setSelectedTrader("");
+        setSelectedCommodity("");
         setSelectedLot(null);
         setLessQty("0");
         setBagWeights({});
-        alert(`Saved Successfully! ID: ${uniqueId}`);
+        alert(`Saved Successfully! ID: ${uniqueId}. Status updated to SAVED.`);
       } else {
         alert(result.error || "Failed to save bill to database.");
       }
@@ -387,18 +642,18 @@ export default function App() {
         await fetch(`${RENDER_BACKEND_URL}/api/bills/${billId}`, {
           method: 'DELETE'
         }).catch(() => {});
-        alert("Saved bill deleted successfully. Lot is now available again.");
+        alert("Saved bill deleted successfully.");
       } catch (e) {
         console.error("Error deleting bill", e);
       }
     };
 
     if (Platform.OS === 'web') {
-      if (window.confirm("Are you sure you want to delete this saved bill? The lot will become available again.")) {
+      if (window.confirm("Are you sure you want to delete this saved bill?")) {
         performDelete();
       }
     } else {
-      Alert.alert("Delete Saved Bill", "Are you sure you want to delete this saved bill? The lot will become available again.", [
+      Alert.alert("Delete Saved Bill", "Are you sure you want to delete this saved bill?", [
         { text: "Cancel", style: "cancel" },
         { text: "Delete", style: "destructive", onPress: performDelete }
       ]);
@@ -429,33 +684,37 @@ export default function App() {
     const htmlContent = `
       <html>
         <head>
-          <title>Aada Bill - ${selectedTrader} (${selectedLot.lotNo})</title>
+          <title>Aada Bill - ${selectedTrader}</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; color: #333; }
-            .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-            .box { border: 1px solid #ccc; padding: 15px; border-radius: 6px; }
-            .bags-grid { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
-            .bag-item { border: 1px solid #0984e3; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-            .total { font-size: 16px; color: #00b894; font-weight: bold; margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px; }
+            body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 20px; color: #2d3436; max-width: 450px; margin: auto; }
+            .receipt-box { border: 2px dashed #0984e3; padding: 20px; border-radius: 8px; background: #fdfdfd; }
+            .header { text-align: center; border-bottom: 2px solid #2d3436; padding-bottom: 8px; margin-bottom: 12px; }
+            .header h2 { margin: 0; font-size: 18px; color: #0984e3; letter-spacing: 1px; }
+            .header p { margin: 4px 0 0; font-size: 11px; color: #636e72; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+            .bags-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+            .bag-item { border: 1px solid #74b9ff; background: #e8f4fd; padding: 3px 6px; border-radius: 3px; font-size: 11px; }
+            .total-section { font-size: 15px; color: #00b894; font-weight: bold; margin-top: 12px; border-top: 2px solid #2d3436; padding-top: 8px; }
+            .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #b2bec3; }
           </style>
         </head>
         <body>
-          <div class="header">
-            <h2>AADA BILL / PATTI</h2>
-            <p>Date: ${currentDate} | CA: ${caName}</p>
-          </div>
-          <div class="box">
-            <div class="row"><strong>Trader:</strong> <span>${selectedTrader}</span></div>
-            <div class="row"><strong>Commodity:</strong> <span>${selectedCommodity}</span></div>
+          <div class="receipt-box">
+            <div class="header">
+              <h2>TUKA ENTRY PLATFORM AADA BILL</h2>
+              <p>Date: ${currentDate} | Authorized CA: ${caName.toUpperCase()}</p>
+            </div>
+            <div class="row"><strong>Trader:</strong> <span>${selectedTrader.toUpperCase()}</span></div>
+            <div class="row"><strong>Commodity:</strong> <span>${selectedCommodity.toUpperCase()}</span></div>
             <div class="row"><strong>Lot Number:</strong> <span>${selectedLot.lotNo}</span></div>
-            <div class="row"><strong>Price:</strong> <span>Rs ${selectedLot.price}</span></div>
-            <div class="row"><strong>Bags:</strong> <span>${totalBagsCount}</span></div>
+            <div class="row"><strong>Price per Quintal:</strong> <span>Rs ${selectedLot.price}</span></div>
+            <div class="row"><strong>Total Bags:</strong> <span>${totalBagsCount}</span></div>
             <div class="bags-grid">${bagsHtml}</div>
-            <div class="row"><strong>Total Qty:</strong> <span>${totalQty.toFixed(2)} kg</span></div>
-            <div class="row"><strong>Less Qty:</strong> <span>${lessQtyNum} kg</span></div>
+            <div class="row"><strong>Gross Qty:</strong> <span>${totalQty.toFixed(2)} kg</span></div>
+            <div class="row"><strong>Less Qty (Bardana):</strong> <span>${lessQtyNum} kg</span></div>
             <div class="row"><strong>Net Qty:</strong> <span>${netQty.toFixed(2)} kg</span></div>
-            <div class="row total"><span>Total Amount:</span> <span>Rs ${totalAmount.toFixed(2)}</span></div>
+            <div class="row total-section"><span>Total Amount:</span> <span>Rs ${totalAmount.toFixed(2)}</span></div>
+            <div class="footer">Verified & Generated Digitally</div>
           </div>
           <script>window.onload = function() { window.print(); }</script>
         </body>
@@ -474,33 +733,37 @@ export default function App() {
     const htmlContent = `
       <html>
         <head>
-          <title>Aada Bill - ${bill.trader} (${bill.lotNo})</title>
+          <title>Aada Bill - ${bill.trader}</title>
           <style>
-            body { font-family: Arial, sans-serif; padding: 20px; color: #333; }
-            .header { text-align: center; border-bottom: 2px solid #333; padding-bottom: 10px; margin-bottom: 15px; }
-            .row { display: flex; justify-content: space-between; margin-bottom: 8px; font-size: 14px; }
-            .box { border: 1px solid #ccc; padding: 15px; border-radius: 6px; }
-            .bags-grid { display: flex; flex-wrap: wrap; gap: 6px; margin: 10px 0; }
-            .bag-item { border: 1px solid #0984e3; padding: 4px 8px; border-radius: 4px; font-size: 12px; }
-            .total { font-size: 16px; color: #00b894; font-weight: bold; margin-top: 15px; border-top: 1px dashed #ccc; padding-top: 10px; }
+            body { font-family: 'Helvetica Neue', Arial, sans-serif; padding: 20px; color: #2d3436; max-width: 450px; margin: auto; }
+            .receipt-box { border: 2px dashed #00b894; padding: 20px; border-radius: 8px; background: #fdfdfd; }
+            .header { text-align: center; border-bottom: 2px solid #2d3436; padding-bottom: 8px; margin-bottom: 12px; }
+            .header h2 { margin: 0; font-size: 18px; color: #00b894; letter-spacing: 1px; }
+            .header p { margin: 4px 0 0; font-size: 11px; color: #636e72; }
+            .row { display: flex; justify-content: space-between; margin-bottom: 6px; font-size: 13px; }
+            .bags-grid { display: flex; flex-wrap: wrap; gap: 4px; margin: 8px 0; }
+            .bag-item { border: 1px solid #55efc4; background: #e8f8f5; padding: 3px 6px; border-radius: 3px; font-size: 11px; }
+            .total-section { font-size: 15px; color: #00b894; font-weight: bold; margin-top: 12px; border-top: 2px solid #2d3436; padding-top: 8px; }
+            .footer { text-align: center; margin-top: 20px; font-size: 10px; color: #b2bec3; }
           </style>
         </head>
         <body>
-          <div class="header">
-            <h2>AADA BILL / PATTI (REPRINT)</h2>
-            <p>Date: ${bill.date} | CA: ${bill.caName}</p>
-          </div>
-          <div class="box">
+          <div class="receipt-box">
+            <div class="header">
+              <h2>TUKA ENTRY PLATFORM BILL (REPRINT)</h2>
+              <p>ID: ${bill.uniqueId} | Date: ${bill.date} | CA: ${bill.caName}</p>
+            </div>
             <div class="row"><strong>Trader:</strong> <span>${bill.trader}</span></div>
             <div class="row"><strong>Commodity:</strong> <span>${bill.commodity || 'N/A'}</span></div>
             <div class="row"><strong>Lot Number:</strong> <span>${bill.lotNo}</span></div>
-            <div class="row"><strong>Price:</strong> <span>Rs ${bill.price}</span></div>
-            <div class="row"><strong>Bags:</strong> <span>${bill.bags}</span></div>
+            <div class="row"><strong>Price per Quintal:</strong> <span>Rs ${bill.price}</span></div>
+            <div class="row"><strong>Total Bags:</strong> <span>${bill.bags}</span></div>
             <div class="bags-grid">${savedBagsHtml}</div>
-            <div class="row"><strong>Total Qty:</strong> <span>${bill.totalQty} kg</span></div>
+            <div class="row"><strong>Gross Qty:</strong> <span>${bill.totalQty} kg</span></div>
             <div class="row"><strong>Less Qty:</strong> <span>${bill.lessQty} kg</span></div>
             <div class="row"><strong>Net Qty:</strong> <span>${bill.netQty} kg</span></div>
-            <div class="row total"><span>Total Amount:</span> <span>Rs ${bill.amount}</span></div>
+            <div class="row total-section"><span>Total Amount:</span> <span>Rs ${bill.amount}</span></div>
+            <div class="footer">Duplicate Reprint Copy</div>
           </div>
           <script>window.onload = function() { window.print(); }</script>
         </body>
@@ -509,9 +772,20 @@ export default function App() {
     triggerPrint(htmlContent);
   };
 
-  const filteredSavedBills = savedBills.filter(bill => {
-    if (filterCommodity !== "All" && (bill.commodity || "General") !== filterCommodity) {
+  const roleScopedBills = userRole === 'admin' 
+    ? savedBills 
+    : savedBills.filter(bill => (bill.caName || '').trim().toUpperCase() === caName.trim().toUpperCase());
+
+  const filteredSavedBills = roleScopedBills.filter(bill => {
+    if (filterCommodity !== "All" && (bill.commodity || "GENERAL").trim().toUpperCase() !== filterCommodity.trim().toUpperCase()) {
       return false;
+    }
+    if (searchQuery.trim() !== "") {
+      const q = searchQuery.toLowerCase();
+      const matchTrader = (bill.trader || "").toLowerCase().includes(q);
+      const matchLot = String(bill.lotNo || "").toLowerCase().includes(q);
+      const matchId = (bill.uniqueId || "").toLowerCase().includes(q);
+      if (!matchTrader && !matchLot && !matchId) return false;
     }
     if (!fromDateStr && !toDateStr) return true;
     const billTimestamp = parseBillDate(bill.date);
@@ -534,26 +808,32 @@ export default function App() {
     const exportData = filteredSavedBills.map((b, index) => {
       let rowObj: Record<string, any> = {
         "Sl No": index + 1,
-        "Unique ID": b.uniqueId || "M051026D-1",
-        "Date": b.date,
-        "CA Name": b.caName,
-        "Trader Name": b.trader,
+        "Unique ID": b.uniqueId || "",
+        "Date": b.date || "",
+        "CA Name": b.caName || "",
+        "Trader Name": b.trader || "",
         "Commodity": b.commodity || "",
-        "Lot Number": b.lotNo,
-        "Total Bags": b.bags
+        "Lot Number": b.lotNo || "",
+        "Total Bags": b.bags || 0
       };
 
       if (b.bagWeights) {
-        Object.keys(b.bagWeights).forEach(bagKey => {
+        const bagKeys = Object.keys(b.bagWeights).sort((x, y) => {
+          const numX = parseInt(x.replace(/\D/g, ''), 10) || 0;
+          const numY = parseInt(y.replace(/\D/g, ''), 10) || 0;
+          return numX - numY;
+        });
+        bagKeys.forEach(bagKey => {
           rowObj[bagKey] = b.bagWeights[bagKey];
         });
       }
 
-      rowObj["Total Qty (kg)"] = b.totalQty;
-      rowObj["Less Qty (kg)"] = b.lessQty;
-      rowObj["Net Qty (kg)"] = b.netQty;
-      rowObj["Price (Rs)"] = b.price;
-      rowObj["Total Amount (Rs)"] = b.amount;
+      // Explicitly placed at the end after all bag columns
+      rowObj["Total Qty"] = b.totalQty || 0;
+      rowObj["Less Qty"] = b.lessQty || 0;
+      rowObj["Net Qty"] = b.netQty || 0;
+      rowObj["Price"] = b.price || 0;
+      rowObj["Total Amount"] = b.amount || 0;
 
       return rowObj;
     });
@@ -577,7 +857,8 @@ export default function App() {
   const renderBagGrid = () => {
     if (!selectedLot) return null;
     let boxes = [];
-    for (let i = 1; i <= selectedLot.bags; i++) {
+    const totalBags = selectedLot.bags || 0;
+    for (let i = 1; i <= totalBags; i++) {
       boxes.push(
         <View key={i} style={styles.bagBox}>
           <Text style={styles.bagBoxTitle}>B{i}</Text>
@@ -585,8 +866,8 @@ export default function App() {
             ref={el => inputRefs.current[i] = el}
             style={styles.bagBoxInput}
             keyboardType="numeric"
-            returnKeyType={i === selectedLot.bags ? "done" : "next"}
-            onSubmitEditing={() => handleKeyPressNext(i, selectedLot.bags)}
+            returnKeyType={i === totalBags ? "done" : "next"}
+            onSubmitEditing={() => handleKeyPressNext(i, totalBags)}
             blurOnSubmit={false}
             value={bagWeights[i] !== undefined ? String(bagWeights[i]) : ""}
             onChangeText={(text) => handleBagWeightChange(i, text)}
@@ -603,22 +884,113 @@ export default function App() {
     return (
       <SafeAreaView style={styles.loginContainer}>
         <View style={styles.loginCard}>
-          <Text style={styles.loginTitle}>🔒 Tuka Entry Login</Text>
-          <Text style={styles.loginSubLabel}>Enter Password to Continue</Text>
-          <TextInput
-            style={styles.loginInput}
-            secureTextEntry
-            placeholder="Enter Password (e.g. 4321)"
-            placeholderTextColor="#b2bec3"
-            value={passwordInput}
-            onChangeText={setPasswordInput}
-            returnKeyType="done"
-            onSubmitEditing={handleLogin}
-          />
-          {loginError ? <Text style={styles.errorText}>{loginError}</Text> : null}
-          <TouchableOpacity style={styles.loginBtn} onPress={handleLogin}>
-            <Text style={styles.loginBtnText}>Login</Text>
-          </TouchableOpacity>
+          <Text style={styles.loginTitle}>🔒 TUKA ENTRY PLATFORM</Text>
+          <Text style={styles.loginSubLabel}>Enter Username & Password</Text>
+          
+          {authMode === 'login' && (
+            <>
+              <TextInput
+                style={styles.loginInput}
+                placeholder="Username (e.g. NITIN CA or admin)"
+                placeholderTextColor="#b2bec3"
+                value={usernameInput}
+                onChangeText={setUsernameInput}
+                autoCapitalize="characters"
+                autoComplete="username"
+              />
+              <TextInput
+                style={styles.loginInput}
+                secureTextEntry
+                placeholder="Password"
+                placeholderTextColor="#b2bec3"
+                value={passwordInput}
+                onChangeText={setPasswordInput}
+                returnKeyType="done"
+                autoComplete="new-password"
+              />
+              {loginError ? <Text style={styles.errorText}>{loginError}</Text> : null}
+
+              <View style={{ flexDirection: 'row', gap: 10, width: '100%', marginTop: 6 }}>
+                <TouchableOpacity style={[styles.loginBtn, { flex: 1, backgroundColor: '#0984e3' }]} onPress={() => handleLogin('ca')}>
+                  <Text style={styles.loginBtnText}>CA Login</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={[styles.loginBtn, { flex: 1, backgroundColor: '#00b894' }]} onPress={() => handleLogin('admin')}>
+                  <Text style={styles.loginBtnText}>Admin Login</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ flexDirection: 'row', justifyContent: 'space-between', width: '100%', marginTop: 14 }}>
+                <TouchableOpacity onPress={() => setAuthMode('register')}>
+                  <Text style={styles.switchModeText}>New CA? Register</Text>
+                </TouchableOpacity>
+                <TouchableOpacity onPress={() => setAuthMode('reset')}>
+                  <Text style={[styles.switchModeText, { color: '#e17055' }]}>Reset Password</Text>
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
+
+          {authMode === 'register' && (
+            <View style={{ width: '100%', marginTop: 4 }}>
+              <Text style={styles.subLabel}>CA Username</Text>
+              <TextInput
+                style={styles.loginInput}
+                placeholder="Enter CA Username"
+                placeholderTextColor="#b2bec3"
+                value={newCaName}
+                onChangeText={setNewCaName}
+                autoCapitalize="characters"
+                autoComplete="username"
+              />
+              <Text style={styles.subLabel}>CA Password</Text>
+              <TextInput
+                style={styles.loginInput}
+                secureTextEntry
+                placeholder="Enter Password"
+                placeholderTextColor="#b2bec3"
+                value={newCaPassword}
+                onChangeText={setNewCaPassword}
+                autoComplete="new-password"
+              />
+              <TouchableOpacity style={[styles.loginBtn, { backgroundColor: '#e17055', marginTop: 6, width: '100%' }]} onPress={handleRegisterCA}>
+                <Text style={styles.loginBtnText}>Register CA</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.switchModeBtn} onPress={() => { setAuthMode('login'); setNewCaName(''); setNewCaPassword(''); }}>
+                <Text style={styles.switchModeText}>Back to Login</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {authMode === 'reset' && (
+            <View style={{ width: '100%', marginTop: 4 }}>
+              <Text style={styles.subLabel}>CA Username</Text>
+              <TextInput
+                style={styles.loginInput}
+                placeholder="Enter Registered CA Username"
+                placeholderTextColor="#b2bec3"
+                value={resetCaName}
+                onChangeText={setResetCaName}
+                autoCapitalize="characters"
+                autoComplete="username"
+              />
+              <Text style={styles.subLabel}>New CA Password</Text>
+              <TextInput
+                style={styles.loginInput}
+                secureTextEntry
+                placeholder="Enter New Password"
+                placeholderTextColor="#b2bec3"
+                value={resetCaNewPassword}
+                onChangeText={setResetCaNewPassword}
+                autoComplete="new-password"
+              />
+              <TouchableOpacity style={[styles.loginBtn, { backgroundColor: '#6c5ce7', marginTop: 6, width: '100%' }]} onPress={handleResetPassword}>
+                <Text style={styles.loginBtnText}>Update Password</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.switchModeBtn} onPress={() => { setAuthMode('login'); setResetCaName(''); setResetCaNewPassword(''); }}>
+                <Text style={styles.switchModeText}>Back to Login</Text>
+              </TouchableOpacity>
+            </View>
+          )}
         </View>
       </SafeAreaView>
     );
@@ -626,32 +998,63 @@ export default function App() {
 
   const daysInCurrentPickerMonth = new Date(pickerYear, pickerMonth + 1, 0).getDate();
   const firstDayOfMonth = new Date(pickerYear, pickerMonth, 1).getDay();
-  const allAvailableCommodities = Array.from(new Set(savedBills.map(b => b.commodity || "General")));
+  const allAvailableCommodities = Array.from(new Set(roleScopedBills.map(b => (b.commodity || "GENERAL").toUpperCase())));
+
+  const todayTotalBillsCount = roleScopedBills.filter(b => b.date === currentDate).length;
+  const todayTotalNetWeight = roleScopedBills
+    .filter(b => b.date === currentDate)
+    .reduce((acc, curr) => acc + (parseFloat(curr.netQty) || 0), 0);
+
+  const activeCaLots = rawTendersList.filter(item => item.ca_name === caName.trim().toUpperCase());
+  const activeCaTraders = Array.from(new Set(activeCaLots.map(item => item.trader || "UNKNOWN TRADER")));
+
+  const reversalAvailableTraders = Array.from(
+    new Set(
+      rawTendersList
+        .filter(item => item.ca_name === reversalCaName.trim().toUpperCase())
+        .map(item => item.trader || "UNKNOWN TRADER")
+    )
+  );
+
+  const reversalAvailableCommodities = Array.from(
+    new Set(
+      rawTendersList
+        .filter(item => item.ca_name === reversalCaName.trim().toUpperCase() && (reversalTrader === "Select" || item.trader === reversalTrader.trim().toUpperCase()))
+        .map(item => item.commodity || "GENERAL")
+    )
+  );
 
   return (
     <SafeAreaView style={styles.container}>
       
       {/* Top Header Bar */}
       <View style={styles.tabHeader}>
-        <TouchableOpacity 
-          style={[styles.tabButton, activeTab === 'entry' && styles.activeTabButton]}
-          onPress={() => setActiveTab('entry')}
-        >
-          <Text style={[styles.tabText, activeTab === 'entry' && styles.activeTabText]}>Tuka Entry</Text>
-        </TouchableOpacity>
+        <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{flexGrow: 1, alignItems: 'center'}}>
+          <TouchableOpacity 
+            style={[styles.tabButton, activeTab === 'entry' && styles.activeTabButton]}
+            onPress={() => setActiveTab('entry')}
+          >
+            <Text style={[styles.tabText, activeTab === 'entry' && styles.activeTabText]}>Tuka Entry</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity 
-          style={[styles.tabButton, activeTab === 'saved' && styles.activeTabButton]}
-          onPress={() => setActiveTab('saved')}
-        >
-          <Text style={[styles.tabText, activeTab === 'saved' && styles.activeTabText]}>
-            Saved Bills / Reprint ({savedBills.length})
-          </Text>
-        </TouchableOpacity>
+          <TouchableOpacity 
+            style={[styles.tabButton, activeTab === 'saved' && styles.activeTabButton]}
+            onPress={() => setActiveTab('saved')}
+          >
+            <Text style={[styles.tabText, activeTab === 'saved' && styles.activeTabText]}>
+              Saved Bills / Reprint ({roleScopedBills.length})
+            </Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity style={styles.topImportBtn} onPress={handleExcelImport}>
-          <Text style={styles.topImportBtnText}>📁 Import Option</Text>
-        </TouchableOpacity>
+          {userRole === 'admin' && (
+            <TouchableOpacity 
+              style={[styles.tabButton, activeTab === 'admin' && styles.activeTabButton]}
+              onPress={() => setActiveTab('admin')}
+            >
+              <Text style={[styles.tabText, activeTab === 'admin' && styles.activeTabText]}>⚙️ Admin Lot Upload</Text>
+            </TouchableOpacity>
+          )}
+        </ScrollView>
 
         <TouchableOpacity style={styles.lockCornerBtn} onPress={handleLogout}>
           <Text style={styles.lockCornerBtnText}>🔒 Lock</Text>
@@ -660,6 +1063,17 @@ export default function App() {
 
       {activeTab === 'entry' ? (
         <ScrollView contentContainerStyle={styles.scrollContent}>
+          <View style={styles.dashboardMetricRow}>
+            <View style={styles.metricCard}>
+              <Text style={styles.metricTitle}>Today's Bills</Text>
+              <Text style={styles.metricValue}>{todayTotalBillsCount}</Text>
+            </View>
+            <View style={styles.metricCard}>
+              <Text style={styles.metricTitle}>Today's Weighed</Text>
+              <Text style={styles.metricValue}>{todayTotalNetWeight.toFixed(2)} kg</Text>
+            </View>
+          </View>
+
           <View style={styles.card}>
             <View style={styles.rowBetween}>
               <View>
@@ -668,18 +1082,23 @@ export default function App() {
               </View>
               <View style={{ alignItems: 'flex-end' }}>
                 <Text style={styles.subLabel}>CA Name</Text>
-                <Text style={styles.mainValue}>{caName}</Text>
+                {userRole === 'admin' ? (
+                  <TouchableOpacity onPress={() => setAdminCaSelectModalVisible(true)}>
+                    <Text style={[styles.mainValue, { color: '#0984e3', textDecorationLine: 'underline' }]}>{caName.toUpperCase()} ▼</Text>
+                  </TouchableOpacity>
+                ) : (
+                  <Text style={styles.mainValue}>{caName.toUpperCase()}</Text>
+                )}
               </View>
             </View>
 
             <View style={styles.divider} />
 
             <View style={styles.dropdownRow}>
-              <View style={{ flex: 1, marginRight: 6 }}>
+              <View style={{ flex: 1.5, marginRight: 8 }}>
                 <Text style={styles.subLabel}>Select Trader</Text>
                 <TouchableOpacity 
-                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
-                  disabled={areAllLotsCompleted}
+                  style={styles.dropdownSelector} 
                   onPress={() => setTraderModalVisible(true)}
                 >
                   <Text style={styles.dropdownText} numberOfLines={1}>{selectedTrader || "Trader"}</Text>
@@ -687,11 +1106,11 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
-              <View style={{ flex: 1, marginHorizontal: 3 }}>
+              <View style={{ flex: 1.5, marginHorizontal: 4 }}>
                 <Text style={styles.subLabel}>Commodity</Text>
                 <TouchableOpacity 
-                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
-                  disabled={areAllLotsCompleted || !selectedTrader}
+                  style={styles.dropdownSelector} 
+                  disabled={!selectedTrader}
                   onPress={() => { if (selectedTrader) setCommodityModalVisible(true); }}
                 >
                   <Text style={styles.dropdownText} numberOfLines={1}>{selectedCommodity || "Commodity"}</Text>
@@ -699,29 +1118,25 @@ export default function App() {
                 </TouchableOpacity>
               </View>
 
-              <View style={{ flex: 1, marginLeft: 6 }}>
+              <View style={{ flex: 1.5, marginLeft: 8 }}>
                 <Text style={styles.subLabel}>Select Lot</Text>
                 <TouchableOpacity 
-                  style={[styles.dropdownSelector, areAllLotsCompleted && styles.dropdownSelectorLocked]} 
-                  disabled={areAllLotsCompleted || !selectedTrader || !selectedCommodity}
+                  style={styles.dropdownSelector} 
+                  disabled={!selectedTrader || !selectedCommodity}
                   onPress={() => { if (selectedTrader && selectedCommodity) setLotModalVisible(true); }}
                 >
-                  <Text style={styles.dropdownText} numberOfLines={1}>{selectedLot ? `${selectedLot.lotNo}` : "Lot"}</Text>
+                  <Text style={styles.dropdownText} numberOfLines={1}>
+                    {selectedLot ? `${selectedLot.lotNo} (${selectedLot.bags || 0} Bags)` : "Select Lot"}
+                  </Text>
                   <Text style={styles.dropdownArrow}>▼</Text>
                 </TouchableOpacity>
               </View>
             </View>
 
-            {areAllLotsCompleted && (
-              <View style={styles.completedNotice}>
-                <Text style={styles.completedNoticeText}>🔒 All lots for this selection are completed and saved. Selectors are locked. Click Reset to start a new entry.</Text>
-              </View>
-            )}
-
             {selectedLot && (
               <View style={styles.priceBagBanner}>
                 <Text style={styles.bannerText}>Price: <Text style={styles.bannerHighlight}>Rs {selectedLot.price}</Text></Text>
-                <Text style={styles.bannerText}>Bags: <Text style={styles.bannerHighlight}>{selectedLot.bags}</Text></Text>
+                <Text style={styles.bannerText}>Bags: <Text style={styles.bannerHighlight}>{selectedLot.bags || 0}</Text></Text>
                 {selectedLot.fileName && <Text style={styles.bannerText}>File: <Text style={styles.bannerHighlight}>{selectedLot.fileName}</Text></Text>}
               </View>
             )}
@@ -760,24 +1175,197 @@ export default function App() {
           </View>
 
           <View style={styles.actionButtonsRow}>
-            <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
-              <Text style={styles.resetBtnText}>Reset</Text>
-            </TouchableOpacity>
-
             <TouchableOpacity style={styles.printBtn} onPress={handlePrintCurrent}>
-              <Text style={styles.printBtnText}>🖨 Print</Text>
+              <Text style={styles.printBtnText}>🖨 Print Bill</Text>
             </TouchableOpacity>
 
             <TouchableOpacity style={styles.saveBtn} onPress={handleSaveBill}>
-              <Text style={styles.saveBtnText}>Save</Text>
+              <Text style={styles.saveBtnText}>Save Bill</Text>
             </TouchableOpacity>
           </View>
+        </ScrollView>
+      ) : activeTab === 'admin' && userRole === 'admin' ? (
+        <ScrollView contentContainerStyle={styles.scrollContent}>
+          <Text style={styles.sectionHeader}>⚙️ Admin Panel - Lot Management</Text>
+          
+          {/* Admin Sub-Navigation Buttons for 1. Lot Entry Upload & 2. Lot Reversal */}
+          <View style={{ flexDirection: 'row', gap: 10, marginBottom: 16 }}>
+            <TouchableOpacity 
+              style={[styles.adminSubTabBtn, adminSubMode === 'upload' && styles.adminSubTabBtnActive]} 
+              onPress={() => setAdminSubMode('upload')}
+            >
+              <Text style={[styles.adminSubTabText, adminSubMode === 'upload' && styles.adminSubTabTextActive]}>1. Lot Entry Upload</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity 
+              style={[styles.adminSubTabBtn, adminSubMode === 'reversal' && styles.adminSubTabBtnActive]} 
+              onPress={() => setAdminSubMode('reversal')}
+            >
+              <Text style={[styles.adminSubTabText, adminSubMode === 'reversal' && styles.adminSubTabTextActive]}>2. Lot Reversal</Text>
+            </TouchableOpacity>
+          </View>
+
+          {adminSubMode === 'upload' ? (
+            <View style={styles.card}>
+              <Text style={styles.sectionHeader}>Lot Entry Upload</Text>
+
+              {/* Commission Agent Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Commission Agent <Text style={{color: 'red'}}>*</Text></Text>
+                <TouchableOpacity 
+                  style={[styles.formFieldInput, {justifyContent: 'center'}]} 
+                  onPress={() => setCaModalForUpload(true)}
+                >
+                  <Text style={{color: uploadCaName === "Select" ? '#95a5a6' : '#2f3640', fontWeight: '600'}}>{uploadCaName.toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Purpose Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Purpose</Text>
+                <TextInput 
+                  style={styles.formFieldInput}
+                  value={purposeInput}
+                  onChangeText={(val) => setPurposeInput(val.toUpperCase())}
+                  placeholder="TENDER"
+                  autoCapitalize="characters"
+                />
+              </View>
+
+              {/* Upload File Path Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Upload File Path <Text style={{color: 'red'}}>*</Text></Text>
+                <View style={{flex: 2, flexDirection: 'row', alignItems: 'center', gap: 8}}>
+                  <TouchableOpacity style={styles.chooseFileBtn} onPress={handleExcelImport}>
+                    <Text style={styles.chooseFileBtnText}>Choose File</Text>
+                  </TouchableOpacity>
+                  <Text style={{fontSize: 12, color: '#718093'}} numberOfLines={1}>{selectedUploadFileName}</Text>
+                </View>
+              </View>
+
+              {/* Form Action Buttons */}
+              <View style={{ flexDirection: 'row', gap: 10, marginTop: 20 }}>
+                <TouchableOpacity style={styles.formUploadActionBtn} onPress={handleExcelImport}>
+                  <Text style={styles.formUploadActionBtnText}>Upload</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity style={styles.formDownloadFormatBtn} onPress={handleDownloadFormat}>
+                  <Text style={styles.formDownloadFormatBtnText}>Download Format</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          ) : (
+            <View style={styles.card}>
+              <Text style={styles.sectionHeader}>Lot Reversal</Text>
+
+              {/* Commission Agent Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Commission Agent</Text>
+                <TouchableOpacity 
+                  style={[styles.formFieldInput, {justifyContent: 'center'}]} 
+                  onPress={() => setCaModalForReversal(true)}
+                >
+                  <Text style={{color: reversalCaName === "Select" ? '#95a5a6' : '#2f3640', fontWeight: '600'}}>{reversalCaName.toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Trader Name Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Trader Name <Text style={{color: 'red'}}>*</Text></Text>
+                <TouchableOpacity 
+                  style={[styles.formFieldInput, {justifyContent: 'center'}]} 
+                  onPress={() => setReversalTraderModalVisible(true)}
+                >
+                  <Text style={{color: reversalTrader === "Select" ? '#95a5a6' : '#2f3640', fontWeight: '600'}}>{reversalTrader.toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Commodity Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Commodity <Text style={{color: 'red'}}>*</Text></Text>
+                <TouchableOpacity 
+                  style={[styles.formFieldInput, {justifyContent: 'center'}]} 
+                  onPress={() => setReversalCommodityModalVisible(true)}
+                >
+                  <Text style={{color: reversalCommodity === "Select" ? '#95a5a6' : '#2f3640', fontWeight: '600'}}>{reversalCommodity.toUpperCase()}</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* UnTraded Lot Field */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>UnTraded Lot (Bags)</Text>
+                <TextInput 
+                  style={styles.formFieldInput}
+                  value={reversalUntradedLot}
+                  onChangeText={setReversalUntradedLot}
+                  placeholder="26"
+                  keyboardType="numeric"
+                />
+              </View>
+
+              {/* Running Status Display */}
+              <View style={styles.formFieldRow}>
+                <Text style={styles.formFieldLabel}>Running Status</Text>
+                <Text style={{flex: 2, fontSize: 13, color: '#4a5568', fontWeight: '600', paddingVertical: 10}}>
+                  {reversalStatus.toUpperCase()}
+                </Text>
+              </View>
+
+              {/* Submit Button */}
+              <View style={{ alignItems: 'flex-end', marginTop: 15 }}>
+                <TouchableOpacity style={styles.reversalSubmitBtn} onPress={handleReversalSubmit}>
+                  <Text style={styles.reversalSubmitBtnText}>Submit</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          <Text style={styles.sectionHeader}>Current Active Uploaded Lots:</Text>
+          {rawTendersList.length === 0 ? (
+            <Text style={styles.noBillsText}>No active tender lots currently uploaded.</Text>
+          ) : (
+            <View style={styles.tableContainer}>
+              <View style={[styles.tableRow, styles.tableHeaderRow]}>
+                <Text style={[styles.tableCellHeader, { flex: 1 }]}>Upload Date</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.9 }]}>CA Name</Text>
+                <Text style={[styles.tableCellHeader, { flex: 1 }]}>Trader Name</Text>
+                <Text style={[styles.tableCellHeader, { flex: 1 }]}>Commodity</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.6 }]}>Lot No</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Price</Text>
+                <Text style={[styles.tableCellHeader, { flex: 0.5 }]}>Bags</Text>
+              </View>
+
+              {rawTendersList.map((item, index) => (
+                <View key={index} style={[styles.tableRow, index % 2 === 1 && styles.tableRowAlternate]}>
+                  <Text style={[styles.tableCell, { flex: 1 }]}>{item.upload_date || currentDate}</Text>
+                  <Text style={[styles.tableCellBold, { flex: 0.9 }]} numberOfLines={1}>{item.ca_name}</Text>
+                  <Text style={[styles.tableCell, { flex: 1 }]} numberOfLines={1}>{item.trader}</Text>
+                  <Text style={[styles.tableCellBold, { flex: 1, color: '#0984e3' }]} numberOfLines={1}>{item.commodity}</Text>
+                  <Text style={[styles.tableCellBold, { flex: 0.6 }]}>{item.lotNo}</Text>
+                  <Text style={[styles.tableCell, { flex: 0.7 }]}>Rs {item.price}</Text>
+                  <Text style={[styles.tableCell, { flex: 0.5 }]}>{item.bags || 0}</Text>
+                </View>
+              ))}
+            </View>
+          )}
         </ScrollView>
       ) : (
         <ScrollView contentContainerStyle={styles.scrollContent}>
           <Text style={styles.sectionHeader}>Saved Aada Bill-gala Patti (Re-print & Delete):</Text>
           
           <View style={styles.dateFilterContainer}>
+            <View style={{ marginBottom: 10 }}>
+              <Text style={styles.subLabel}>Search Trader, Lot No, or ID</Text>
+              <TextInput
+                style={styles.searchBarInput}
+                placeholder="Type to search..."
+                placeholderTextColor="#a4b0be"
+                value={searchQuery}
+                onChangeText={setSearchQuery}
+                autoCapitalize="characters"
+              />
+            </View>
+
             <View style={styles.filterRowTop}>
               <View style={{ flex: 1, marginRight: 6 }}>
                 <Text style={styles.subLabel}>From Date</Text>
@@ -804,16 +1392,16 @@ export default function App() {
               <View style={{ flex: 1, marginRight: 6, marginTop: 8 }}>
                 <Text style={styles.subLabel}>Commodity</Text>
                 <TouchableOpacity style={styles.calendarBox} onPress={() => setCommodityFilterModalVisible(true)}>
-                  <Text style={styles.calendarBoxText} numberOfLines={1}>{filterCommodity}</Text>
+                  <Text style={styles.calendarBoxText} numberOfLines={1}>{filterCommodity.toUpperCase()}</Text>
                   <Text style={styles.dropdownArrow}>▼</Text>
                 </TouchableOpacity>
               </View>
 
               <View style={{ flexDirection: 'row', alignItems: 'flex-end', marginTop: 8 }}>
-                {(fromDateStr || toDateStr || filterCommodity !== "All") && (
+                {(fromDateStr || toDateStr || filterCommodity !== "All" || searchQuery !== "") && (
                   <TouchableOpacity 
                     style={styles.clearDateBtn} 
-                    onPress={() => { setFromDateStr(""); setToDateStr(""); setFilterCommodity("All"); }}
+                    onPress={() => { setFromDateStr(""); setToDateStr(""); setFilterCommodity("All"); setSearchQuery(""); }}
                   >
                     <Text style={styles.clearDateBtnText}>Clear</Text>
                   </TouchableOpacity>
@@ -839,7 +1427,7 @@ export default function App() {
                 <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Total Qty</Text>
                 <Text style={[styles.tableCellHeader, { flex: 0.7 }]}>Net Qty</Text>
                 <Text style={[styles.tableCellHeader, { flex: 0.8 }]}>Amount</Text>
-                <Text style={[styles.tableCellHeader, { flex: 1.2, textAlign: 'center' }]}>Actions</Text>
+                <Text style={[styles.tableCellHeader, { flex: userRole === 'admin' ? 1.2 : 0.8, textAlign: 'center' }]}>Actions</Text>
               </View>
 
               {filteredSavedBills.map((bill, index) => (
@@ -856,13 +1444,15 @@ export default function App() {
                   <Text style={[styles.tableCellBold, { flex: 0.7, color: '#e17055' }]}>{bill.netQty} kg</Text>
                   <Text style={[styles.tableCellBold, { flex: 0.8, color: '#00b894' }]}>Rs {bill.amount}</Text>
                   
-                  <View style={{ flex: 1.2, flexDirection: 'row', justifyContent: 'center', gap: 4 }}>
+                  <View style={{ flex: userRole === 'admin' ? 1.2 : 0.8, flexDirection: 'row', justifyContent: 'center', gap: 4 }}>
                     <TouchableOpacity style={styles.tableReprintBtn} onPress={() => handleReprintBill(bill)}>
                       <Text style={styles.tableReprintText}>Print</Text>
                     </TouchableOpacity>
-                    <TouchableOpacity style={styles.tableDeleteBtn} onPress={() => handleDeleteBill(bill.id)}>
-                      <Text style={styles.tableDeleteText}>Delete</Text>
-                    </TouchableOpacity>
+                    {userRole === 'admin' && (
+                      <TouchableOpacity style={styles.tableDeleteBtn} onPress={() => handleDeleteBill(bill.id)}>
+                        <Text style={styles.tableDeleteText}>Delete</Text>
+                      </TouchableOpacity>
+                    )}
                   </View>
                 </View>
               ))}
@@ -870,6 +1460,107 @@ export default function App() {
           )}
         </ScrollView>
       )}
+
+      {/* ADMIN CA SELECT MODAL FOR TUKA ENTRY */}
+      <Modal visible={adminCaSelectModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select CA Name</Text>
+            {availableCAs.map(ca => (
+              <TouchableOpacity key={ca} style={styles.modalItem} onPress={() => { setCaName(ca); setAdminCaSelectModalVisible(false); }}>
+                <Text style={styles.modalItemText}>{ca}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setAdminCaSelectModalVisible(false)}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* UPLOAD CA SELECT MODAL */}
+      <Modal visible={caModalForUpload} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Commission Agent</Text>
+            {availableCAs.map(ca => (
+              <TouchableOpacity key={ca} style={styles.modalItem} onPress={() => { setUploadCaName(ca); setCaModalForUpload(false); }}>
+                <Text style={styles.modalItemText}>{ca}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setCaModalForUpload(false)}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* REVERSAL CA SELECT MODAL */}
+      <Modal visible={caModalForReversal} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Commission Agent</Text>
+            {availableCAs.map(ca => (
+              <TouchableOpacity key={ca} style={styles.modalItem} onPress={() => { setReversalCaName(ca); setReversalTrader("Select"); setReversalCommodity("Select"); setCaModalForReversal(false); }}>
+                <Text style={styles.modalItemText}>{ca}</Text>
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setCaModalForReversal(false)}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* REVERSAL TRADER SELECT MODAL */}
+      <Modal visible={reversalTraderModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Trader ({reversalCaName})</Text>
+            {reversalAvailableTraders.length === 0 ? (
+              <Text style={styles.noBillsText}>No traders found for this CA. Please upload a lot first.</Text>
+            ) : (
+              reversalAvailableTraders.map(trader => (
+                <TouchableOpacity 
+                  key={trader} 
+                  style={styles.modalItem} 
+                  onPress={() => { setReversalTrader(trader); setReversalCommodity("Select"); setReversalTraderModalVisible(false); }}
+                >
+                  <Text style={styles.modalItemText}>{trader}</Text>
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setReversalTraderModalVisible(false)}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* REVERSAL COMMODITY SELECT MODAL */}
+      <Modal visible={reversalCommodityModalVisible} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Select Commodity ({reversalTrader})</Text>
+            {reversalAvailableCommodities.length === 0 ? (
+              <Text style={styles.noBillsText}>No commodities found for this trader.</Text>
+            ) : (
+              reversalAvailableCommodities.map(comm => (
+                <TouchableOpacity 
+                  key={comm} 
+                  style={styles.modalItem} 
+                  onPress={() => { setReversalCommodity(comm); setReversalCommodityModalVisible(false); }}
+                >
+                  <Text style={styles.modalItemText}>{comm}</Text>
+                </TouchableOpacity>
+              ))
+            )}
+            <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setReversalCommodityModalVisible(false)}>
+              <Text style={styles.modalCloseText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       {/* POPUP CALENDAR MODAL */}
       <Modal visible={calendarTarget !== null} transparent animationType="fade">
@@ -982,11 +1673,15 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Trader</Text>
-            {Object.keys(tenderDatabase).map(trader => (
-              <TouchableOpacity key={trader} style={styles.modalItem} onPress={() => handleSelectTrader(trader)}>
-                <Text style={styles.modalItemText}>{trader}</Text>
-              </TouchableOpacity>
-            ))}
+            {activeCaTraders.length === 0 ? (
+              <Text style={styles.noBillsText}>No unweighted traders found for {caName}.</Text>
+            ) : (
+              activeCaTraders.map(trader => (
+                <TouchableOpacity key={trader} style={styles.modalItem} onPress={() => handleSelectTrader(trader)}>
+                  <Text style={styles.modalItemText}>{trader}</Text>
+                </TouchableOpacity>
+              ))
+            )}
             <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setTraderModalVisible(false)}>
               <Text style={styles.modalCloseText}>Cancel</Text>
             </TouchableOpacity>
@@ -999,7 +1694,7 @@ export default function App() {
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Commodity ({selectedTrader})</Text>
-            {selectedTrader && Array.from(new Set(tenderDatabase[selectedTrader]?.map(item => item.commodity || "General"))).map(comm => (
+            {selectedTrader && Array.from(new Set(activeCaLots.filter(i => i.trader === selectedTrader).map(item => item.commodity || "GENERAL"))).map(comm => (
               <TouchableOpacity key={comm} style={styles.modalItem} onPress={() => handleSelectCommodity(comm)}>
                 <Text style={styles.modalItemText}>{comm}</Text>
               </TouchableOpacity>
@@ -1011,40 +1706,26 @@ export default function App() {
         </View>
       </Modal>
 
-      {/* Lot Modal - Filters out saved lots completely */}
+      {/* Lot Modal */}
       <Modal visible={lotModalVisible} transparent animationType="fade">
         <View style={styles.modalOverlay}>
           <View style={styles.modalContent}>
             <Text style={styles.modalTitle}>Select Lot ({selectedTrader} / {selectedCommodity})</Text>
             
             <ScrollView style={{ maxHeight: 300 }}>
-              {selectedTrader && selectedCommodity && tenderDatabase[selectedTrader]
-                ?.filter(lot => {
-                  const isSaved = savedBills.some(b => 
-                    b.trader === selectedTrader && 
-                    b.commodity === selectedCommodity && 
-                    b.lotNo === lot.lotNo &&
-                    b.date === currentDate
-                  );
-                  return (lot.commodity || "General") === selectedCommodity && !isSaved;
-                })
-                .map(lot => (
+              {selectedTrader && selectedCommodity && activeCaLots
+                .filter(lot => lot.trader === selectedTrader && (lot.commodity || "GENERAL") === selectedCommodity)
+                .map((lot, index) => (
                   <TouchableOpacity 
-                    key={lot.lotNo} 
+                    key={`${lot.lotNo}-${index}`} 
                     style={styles.modalItem}
                     onPress={() => handleSelectLot(lot)}
                   >
                     <Text style={styles.modalItemText}>
-                      {lot.lotNo} ({lot.bags} Bags) - Rs {lot.price} {lot.fileName ? `[${lot.fileName}]` : ''}
+                      {lot.lotNo} ({lot.bags || 0} Bags) - Rs {lot.price} {lot.fileName ? `[${lot.fileName}]` : ''}
                     </Text>
                   </TouchableOpacity>
                 ))}
-
-              {selectedTrader && selectedCommodity && tenderDatabase[selectedTrader]
-                ?.filter(lot => (lot.commodity || "General") === selectedCommodity)
-                .every(lot => savedBills.some(b => b.trader === selectedTrader && b.commodity === selectedCommodity && b.lotNo === lot.lotNo && b.date === currentDate)) && (
-                  <Text style={styles.noBillsText}>All lots for this trader & commodity have been saved!</Text>
-                )}
             </ScrollView>
 
             <TouchableOpacity style={styles.modalCloseBtn} onPress={() => setLotModalVisible(false)}>
@@ -1065,31 +1746,50 @@ const styles = StyleSheet.create({
   loginSubLabel: { fontSize: 13, color: '#718093', marginBottom: 20 },
   loginInput: { width: '100%', height: 46, borderWidth: 1, borderColor: '#dcdde1', borderRadius: 8, paddingHorizontal: 14, fontSize: 15, backgroundColor: '#f8f9fa', marginBottom: 12, color: '#2f3640' },
   errorText: { color: '#ff7675', fontSize: 12, marginBottom: 10, fontWeight: '600' },
-  loginBtn: { width: '100%', backgroundColor: '#0984e3', paddingVertical: 12, borderRadius: 8, alignItems: 'center', marginTop: 6 },
+  loginBtn: { paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   loginBtnText: { color: '#fff', fontSize: 15, fontWeight: 'bold' },
-  container: { flex: 1, backgroundColor: '#f0f3f6', paddingTop: Platform.OS === 'android' ? 25 : 0 },
+  switchModeBtn: { marginTop: 12, alignItems: 'center' },
+  switchModeText: { color: '#0984e3', fontSize: 13, fontWeight: 'bold' },
+  container: { flex: 1, backgroundColor: '#f0f3f6' },
   tabHeader: { flexDirection: 'row', backgroundColor: '#fff', borderBottomWidth: 1, borderColor: '#dcdde1', elevation: 3, alignItems: 'center' },
   tabButton: { flex: 1, paddingVertical: 14, alignItems: 'center', justifyContent: 'center' },
   activeTabButton: { borderBottomWidth: 3, borderBottomColor: '#00b894', backgroundColor: '#f8f9fa' },
-  tabText: { fontSize: 13, fontWeight: '600', color: '#718093' },
+  tabText: { fontSize: 12, fontWeight: '600', color: '#718093' },
   activeTabText: { color: '#00b894', fontWeight: 'bold' },
+  adminSubTabBtn: { flex: 1, paddingVertical: 10, backgroundColor: '#f1f2f6', borderRadius: 6, alignItems: 'center' },
+  adminSubTabBtnActive: { backgroundColor: '#0984e3' },
+  adminSubTabText: { fontSize: 12, fontWeight: 'bold', color: '#57606f' },
+  adminSubTabTextActive: { color: '#fff' },
+  formFieldRow: { flexDirection: 'row', alignItems: 'center', marginBottom: 14 },
+  formFieldLabel: { flex: 1, fontSize: 13, color: '#2f3640', fontWeight: '600' },
+  formFieldInput: { flex: 2, height: 40, borderWidth: 1, borderColor: '#dcdde1', borderRadius: 6, paddingHorizontal: 10, backgroundColor: '#f8f9fa', fontSize: 13, color: '#2f3640' },
+  chooseFileBtn: { backgroundColor: '#e2e8f0', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 4, borderWidth: 1, borderColor: '#cbd5e1' },
+  chooseFileBtnText: { color: '#1e293b', fontSize: 12, fontWeight: 'bold' },
+  formUploadActionBtn: { backgroundColor: '#00b894', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 6, alignItems: 'center' },
+  formUploadActionBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  formDownloadFormatBtn: { backgroundColor: '#0984e3', paddingVertical: 10, paddingHorizontal: 20, borderRadius: 6, alignItems: 'center' },
+  formDownloadFormatBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
+  reversalSubmitBtn: { backgroundColor: '#10b981', paddingVertical: 10, paddingHorizontal: 24, borderRadius: 6, alignItems: 'center' },
+  reversalSubmitBtnText: { color: '#fff', fontSize: 14, fontWeight: 'bold' },
   topImportBtn: { backgroundColor: '#0984e3', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginRight: 6 },
+  topImportBtnLocked: { backgroundColor: '#b2bec3', opacity: 0.8 },
   topImportBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   lockCornerBtn: { backgroundColor: '#ff7675', paddingVertical: 8, paddingHorizontal: 12, borderRadius: 6, marginRight: 10 },
   lockCornerBtnText: { color: '#fff', fontSize: 12, fontWeight: 'bold' },
   scrollContent: { padding: 16, paddingBottom: 40 },
+  dashboardMetricRow: { flexDirection: 'row', gap: 10, marginBottom: 16 },
+  metricCard: { flex: 1, backgroundColor: '#fff', borderRadius: 8, padding: 12, borderWidth: 1, borderColor: '#dcdde1', alignItems: 'center' },
+  metricTitle: { fontSize: 11, color: '#718093', fontWeight: '600', marginBottom: 2 },
+  metricValue: { fontSize: 15, fontWeight: 'bold', color: '#00b894' },
   card: { backgroundColor: '#fff', borderRadius: 10, padding: 16, elevation: 2, marginBottom: 16 },
   rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  subLabel: { fontSize: 11, color: '#718093', fontWeight: '600', marginBottom: 4 },
+  subLabel: { fontSize: 13, color: '#718093', fontWeight: '600', marginBottom: 4 },
   mainValue: { fontSize: 15, fontWeight: 'bold', color: '#2f3640' },
   divider: { height: 1, backgroundColor: '#f1f2f6', marginVertical: 14 },
   dropdownRow: { flexDirection: 'row', justifyContent: 'space-between' },
-  dropdownSelector: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: '#dcdde1', borderRadius: 6, paddingHorizontal: 8, height: 40 },
-  dropdownSelectorLocked: { backgroundColor: '#dfe6e9', opacity: 0.6 },
-  dropdownText: { fontSize: 12, color: '#2f3640', fontWeight: '500', flex: 1 },
-  dropdownArrow: { fontSize: 9, color: '#718093', marginLeft: 2 },
-  completedNotice: { backgroundColor: '#e8f8f5', borderColor: '#00b894', borderWidth: 1, padding: 10, borderRadius: 6, marginTop: 12 },
-  completedNoticeText: { fontSize: 12, color: '#009473', fontWeight: 'bold', textAlign: 'center' },
+  dropdownSelector: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', backgroundColor: '#f8f9fa', borderWidth: 1, borderColor: '#dcdde1', borderRadius: 8, paddingHorizontal: 16, height: 56 },
+  dropdownText: { fontSize: 16, color: '#2f3640', fontWeight: '600', flex: 1 },
+  dropdownArrow: { fontSize: 12, color: '#718093', marginLeft: 8 },
   priceBagBanner: { flexDirection: 'row', justifyContent: 'space-between', backgroundColor: '#e1f5fe', padding: 10, borderRadius: 6, marginTop: 12 },
   bannerText: { fontSize: 13, color: '#01579b', fontWeight: '600' },
   bannerHighlight: { fontWeight: 'bold' },
@@ -1106,7 +1806,7 @@ const styles = StyleSheet.create({
   summaryLabelAmount: { fontSize: 15, color: '#00b894', fontWeight: 'bold' },
   summaryValueAmount: { fontSize: 18, fontWeight: 'bold', color: '#00b894' },
   actionButtonsRow: { flexDirection: 'row', gap: 10, marginBottom: 30 },
-  resetBtn: { flex: 1, backgroundColor: '#ff7675', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
+  resetBtn: { backgroundColor: '#ff7675', paddingVertical: 12, borderRadius: 8, alignItems: 'center', justifyContent: 'center' },
   resetBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
   printBtn: { flex: 1, backgroundColor: '#0984e3', paddingVertical: 12, borderRadius: 8, alignItems: 'center' },
   printBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
@@ -1114,14 +1814,15 @@ const styles = StyleSheet.create({
   saveBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 15 },
   sectionHeader: { fontSize: 14, fontWeight: 'bold', color: '#2f3640', marginBottom: 12 },
   dateFilterContainer: { marginBottom: 14, backgroundColor: '#fff', padding: 12, borderRadius: 8, borderWidth: 1, borderColor: '#dcdde1' },
-  filterRowTop: { flexDirection: 'row', justifyContent: 'space-between' },
+  searchBarInput: { height: 40, borderWidth: 1, borderColor: '#dcdde1', borderRadius: 6, paddingHorizontal: 12, backgroundColor: '#f8f9fa', fontSize: 13, color: '#2f3640' },
+  filterRowTop: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 8 },
   filterRowBottom: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   calendarBox: { height: 40, borderWidth: 1, borderColor: '#dcdde1', borderRadius: 6, paddingHorizontal: 10, backgroundColor: '#f8f9fa', flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
   calendarBoxText: { fontSize: 12, color: '#2f3640', fontWeight: '600', flex: 1 },
   placeholderText: { color: '#a4b0be', fontWeight: 'normal' },
   calendarIcon: { fontSize: 14 },
   clearDateBtn: { height: 40, backgroundColor: '#dfe6e9', paddingHorizontal: 10, borderRadius: 6, justifyContent: 'center', alignItems: 'center', marginRight: 6 },
-  clearDateBtnText: { color: '#2d3436', fontWeight: 'bold', fontSize: 11 },
+  clearDateBtnText: { color: '#2f3640', fontWeight: 'bold', fontSize: 11 },
   exportExcelBtn: { height: 40, backgroundColor: '#00b894', paddingHorizontal: 14, borderRadius: 6, justifyContent: 'center', alignItems: 'center' },
   exportExcelBtnText: { color: '#fff', fontWeight: 'bold', fontSize: 12 },
   noBillsText: { fontSize: 13, color: '#718093', fontStyle: 'italic', textAlign: 'center', marginTop: 20 },
@@ -1142,7 +1843,7 @@ const styles = StyleSheet.create({
   modalTitle: { fontSize: 16, fontWeight: 'bold', color: '#2f3640', marginBottom: 15, textAlign: 'center' },
   modalItem: { paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#f1f2f6' },
   modalItemText: { fontSize: 14, color: '#2f3640', fontWeight: '500' },
-  modalCloseBtn: { marginTop: 15, backgroundColor: '#b2bec3', paddingVertical: 10, borderRadius: 6, alignItems: 'center' },
+  modalCloseBtn: { marginTop: 15, backgroundColor: '#b2bec3', paddingVertical: 10, borderRadius: 6, alignItems: 'center', justifyContent: 'center' },
   modalCloseText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
   calendarModalContent: { width: '90%', maxWidth: 340, backgroundColor: '#fff', borderRadius: 12, padding: 18, elevation: 5 },
   calNavHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
@@ -1159,3 +1860,4 @@ const styles = StyleSheet.create({
   calDayText: { fontSize: 13, color: '#2f3640', fontWeight: '600' },
   calDayTextFrozen: { color: '#a4b0be', textDecorationLine: 'line-through' },
 });
+
