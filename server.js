@@ -21,8 +21,8 @@ const pool = mysql.createPool({
     rejectUnauthorized: true
   },
   waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
+  connectionLimit: 5,
+  connectTimeout: 10000
 });
 
 async function initDB() {
@@ -74,10 +74,9 @@ async function initDB() {
     `);
     console.log("Database tables verified/created successfully!");
   } catch (err) {
-    console.error("Database initialization error:", err);
+    console.error("Table check/creation error:", err);
   }
 }
-initDB();
 
 app.get('/api/cas', async (req, res) => {
   try {
@@ -116,6 +115,7 @@ app.get('/api/tenders', async (req, res) => {
     `);
     res.json(rows);
   } catch (err) {
+    console.error("Error fetching tenders:", err);
     console.error("Error fetching tenders:", err);
     res.status(500).json({ error: err.message });
   }
@@ -218,6 +218,7 @@ app.get('/api/bills', async (req, res) => {
     }));
     res.json(formattedRows);
   } catch (err) {
+    console.error("Error fetching bills:", err);
     res.status(500).json({ error: err.message });
   }
 });
